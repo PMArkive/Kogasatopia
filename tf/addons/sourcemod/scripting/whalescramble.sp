@@ -29,7 +29,6 @@ static const char SCRAMBLE_KEYWORDS[][] =
 };
 
 bool g_bPlayerVoted[MAXPLAYERS + 1];
-bool g_bScrambledThisMap[MAXPLAYERS + 1];
 int g_iVoteRequests = 0;
 bool g_bVoteRunning = false;
 bool g_bNativeVotes = false;
@@ -40,9 +39,12 @@ ConVar g_hAutoRounds = null;
 ConVar g_hVoteTime = null;
 ConVar g_hDisableRespawnTimes = null;
 ConVar g_hCountBots = null;
+ConVar g_hTopSwap = null;
+ConVar g_hRandom = null;
 int g_iRespawnDisableRefs = 0;
 int g_iRoundsSinceAuto = 0;
 char g_sLogPath[PLATFORM_MAX_PATH];
+StringMap g_hScrambleImmunity = null;
 
 #define TEAM_RED  2
 #define TEAM_BLU  3
@@ -74,6 +76,9 @@ public void OnPluginStart()
     g_hVoteTime = CreateConVar("votescramble_votetime", "4", "Scramble vote duration in seconds.", _, true, 1.0, true, 30.0);
     g_hDisableRespawnTimes = FindConVar("mp_disable_respawn_times");
     g_hCountBots = CreateConVar("whalescramble_count_bots", "0", "Include bots when selecting whale scramble targets.", _, true, 0.0, true, 1.0);
+    g_hTopSwap = CreateConVar("sm_ws_topswap", "0", "Enable topswap scramble mode.", _, true, 0.0, true, 1.0);
+    g_hRandom = CreateConVar("sm_ws_random", "1", "Enable random scramble mode.", _, true, 0.0, true, 1.0);
+    g_hScrambleImmunity = new StringMap();
 
     for (int i = 0; i < sizeof(SCRAMBLE_COMMANDS); i++)
     {
@@ -117,9 +122,9 @@ public void OnMapStart()
     g_iRoundsSinceAuto = 0;
     g_iRespawnDisableRefs = 0;
     SetDisableRespawnTimes(false);
-    for (int i = 1; i <= MaxClients; i++)
+    if (g_hScrambleImmunity != null)
     {
-        g_bScrambledThisMap[i] = false;
+        g_hScrambleImmunity.Clear();
     }
     LogWhale("Map start: immunity cleared, votes reset.");
 }
@@ -142,7 +147,6 @@ public void OnClientDisconnect(int client)
 {
     if (client <= 0 || client > MaxClients)
         return;
-    g_bScrambledThisMap[client] = false;
     if (g_bPlayerVoted[client])
     {
         g_bPlayerVoted[client] = false;
@@ -157,7 +161,6 @@ public void OnClientPutInServer(int client)
 {
     if (client <= 0 || client > MaxClients)
         return;
-    g_bScrambledThisMap[client] = false;
 }
 
 public Action Command_Scramble(int client, int args)
@@ -170,7 +173,7 @@ public Action Command_Scramble(int client, int args)
 public Action Command_WhaleScramble(int client, int args)
 {
     LogWhale("Admin whale scramble requested by %N (%d).", client, GetClientUserId(client));
-    StartWhaleScramble(client, true, true);
+    StartConfiguredWhaleScramble(client, true, true);
     return Plugin_Handled;
 }
 
@@ -364,7 +367,25 @@ static bool StartAutoScramble(bool suppressFeedback)
     }
 
     LogWhale("Auto scramble triggered.");
-    return StartWhaleScramble(0, !suppressFeedback, false);
+    return StartConfiguredWhaleScramble(0, !suppressFeedback, false);
+}
+
+static bool StartConfiguredWhaleScramble(int issuer, bool broadcastFailures, bool allowLowPop)
+{
+    if (g_hTopSwap != null && g_hTopSwap.BoolValue)
+    {
+        LogWhale("Configured scramble mode: topswap.");
+        return StartWhaleScramble(issuer, broadcastFailures, allowLowPop);
+    }
+    else if (g_hRandom != null && g_hRandom.BoolValue)
+    {
+        LogWhale("Configured scramble mode: random.");
+        return StartRandomWhaleScramble(issuer, broadcastFailures, allowLowPop);
+    }
+
+    NotifyFailure(issuer, broadcastFailures, "No scramble mode is enabled. Set sm_ws_topswap or sm_ws_random to 1.");
+    LogWhale("Configured scramble aborted: no enabled modes.");
+    return false;
 }
 
 public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, int param2)
@@ -420,7 +441,7 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
             }
             else
             {
-                bool started = StartWhaleScramble(0, true, g_bVoteAllowLowPop);
+                bool started = StartConfiguredWhaleScramble(0, true, g_bVoteAllowLowPop);
                 if (started)
                 {
                     NativeVotes_DisplayPassCustom(vote, "Vote passed. Whale scrambling teams...");
@@ -484,7 +505,7 @@ static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLow
         if (team == TEAM_RED) redCount++;
         else bluCount++;
 
-        if (g_bScrambledThisMap[i]) continue;
+        if (IsScrambleImmune(i)) continue;
 
         if (team == TEAM_RED) redEligible++;
         else bluEligible++;
@@ -501,8 +522,6 @@ static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLow
     }
 
     LogWhale("Counts: total=%d red=%d blu=%d eligibleRed=%d eligibleBlu=%d.", totalPlayers, redCount, bluCount, redEligible, bluEligible);
-    ClearScrambleImmunity();
-
     int swapCount = 0;
     bool lowPop = (totalPlayers < 12);
 
@@ -533,7 +552,7 @@ static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLow
     }
     if (needsFallback)
     {
-        LogWhale("Eligibility low; recalculating without class/immunity filters.");
+        LogWhale("Eligibility low; recalculating without class filters.");
         redEligible = 0;
         bluEligible = 0;
         for (int i = 0; i < MAX_SWAP; i++)
@@ -551,6 +570,7 @@ static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLow
 
             int team = GetClientTeam(i);
             if (team != TEAM_RED && team != TEAM_BLU) continue;
+            if (IsScrambleImmune(i)) continue;
 
             if (team == TEAM_RED) redEligible++;
             else bluEligible++;
@@ -623,6 +643,188 @@ static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLow
     return true;
 }
 
+static bool StartRandomWhaleScramble(int issuer, bool broadcastFailures, bool allowLowPop)
+{
+    LogWhale("StartRandomWhaleScramble: issuer=%d allowLowPop=%d.", issuer, allowLowPop ? 1 : 0);
+    g_iRoundsSinceAuto = 0;
+    int totalPlayers = 0;
+    int redCount = 0;
+    int bluCount = 0;
+    int redEligible = 0;
+    int bluEligible = 0;
+    int redCandidates[MAXPLAYERS + 1];
+    int bluCandidates[MAXPLAYERS + 1];
+    int redCandidateCount = 0;
+    int bluCandidateCount = 0;
+    int topRed[MAX_SWAP];
+    int topBlu[MAX_SWAP];
+
+    for (int i = 0; i < MAX_SWAP; i++)
+    {
+        topRed[i] = 0;
+        topBlu[i] = 0;
+    }
+
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (!IsClientInGame(i)) continue;
+        if (IsFakeClient(i) && (g_hCountBots == null || !g_hCountBots.BoolValue)) continue;
+
+        int team = GetClientTeam(i);
+        if (team != TEAM_RED && team != TEAM_BLU) continue;
+
+        totalPlayers++;
+        if (team == TEAM_RED) redCount++;
+        else bluCount++;
+
+        if (IsScrambleImmune(i)) continue;
+
+        if (team == TEAM_RED)
+        {
+            redEligible++;
+            if (redCandidateCount < sizeof(redCandidates))
+            {
+                redCandidates[redCandidateCount++] = i;
+            }
+        }
+        else
+        {
+            bluEligible++;
+            if (bluCandidateCount < sizeof(bluCandidates))
+            {
+                bluCandidates[bluCandidateCount++] = i;
+            }
+        }
+    }
+
+    LogWhale("Random counts: total=%d red=%d blu=%d eligibleRed=%d eligibleBlu=%d.", totalPlayers, redCount, bluCount, redEligible, bluEligible);
+    int swapCount = 0;
+    bool lowPop = (totalPlayers < 12);
+
+    if (!lowPop)
+    {
+        if (totalPlayers >= 20)
+        {
+            swapCount = 6;
+        }
+        else
+        {
+            swapCount = 4;
+        }
+    }
+    else if (allowLowPop)
+    {
+        swapCount = redEligible < bluEligible ? redEligible : bluEligible;
+        if (swapCount > 2)
+        {
+            swapCount = 2;
+        }
+    }
+
+    bool needsFallback = (redEligible < swapCount || bluEligible < swapCount);
+    if (allowLowPop && lowPop && swapCount == 0)
+    {
+        needsFallback = true;
+    }
+    if (needsFallback)
+    {
+        LogWhale("Random eligibility low; recalculating without class filters.");
+        redEligible = 0;
+        bluEligible = 0;
+        redCandidateCount = 0;
+        bluCandidateCount = 0;
+        for (int i = 1; i <= MaxClients; i++)
+        {
+            if (!IsClientInGame(i)) continue;
+            if (IsFakeClient(i) && (g_hCountBots == null || !g_hCountBots.BoolValue)) continue;
+
+            int team = GetClientTeam(i);
+            if (team != TEAM_RED && team != TEAM_BLU) continue;
+            if (IsScrambleImmune(i)) continue;
+
+            if (team == TEAM_RED)
+            {
+                redEligible++;
+                if (redCandidateCount < sizeof(redCandidates))
+                {
+                    redCandidates[redCandidateCount++] = i;
+                }
+            }
+            else
+            {
+                bluEligible++;
+                if (bluCandidateCount < sizeof(bluCandidates))
+                {
+                    bluCandidates[bluCandidateCount++] = i;
+                }
+            }
+        }
+        if (allowLowPop && lowPop)
+        {
+            swapCount = redEligible < bluEligible ? redEligible : bluEligible;
+            if (swapCount > 2)
+            {
+                swapCount = 2;
+            }
+        }
+    }
+
+    if (swapCount == 0)
+    {
+        if (allowLowPop && lowPop)
+        {
+            NotifyFailure(issuer, broadcastFailures, "Not enough eligible players to swap (RED=%d BLU=%d).", redEligible, bluEligible);
+            LogWhale("Random scramble aborted: not enough eligible players (red=%d blu=%d).", redEligible, bluEligible);
+        }
+        else
+        {
+            NotifyFailure(issuer, broadcastFailures, "Need at least 12 players (current: %d).", totalPlayers);
+            LogWhale("Random scramble aborted: not enough players (total=%d).", totalPlayers);
+        }
+        return false;
+    }
+
+    if (redCount < swapCount || bluCount < swapCount)
+    {
+        NotifyFailure(issuer, broadcastFailures, "Each team needs at least %d players (RED=%d BLU=%d).", swapCount, redCount, bluCount);
+        LogWhale("Random scramble aborted: team size too small (swap=%d red=%d blu=%d).", swapCount, redCount, bluCount);
+        return false;
+    }
+
+    if (redEligible < swapCount || bluEligible < swapCount)
+    {
+        NotifyFailure(issuer, broadcastFailures, "Each team needs at least %d eligible players (RED=%d BLU=%d).", swapCount, redEligible, bluEligible);
+        LogWhale("Random scramble aborted: eligible too small (swap=%d red=%d blu=%d).", swapCount, redEligible, bluEligible);
+        return false;
+    }
+
+    if (!SelectRandomPlayers(redCandidates, redCandidateCount, topRed, swapCount)
+        || !SelectRandomPlayers(bluCandidates, bluCandidateCount, topBlu, swapCount))
+    {
+        NotifyFailure(issuer, broadcastFailures, "Failed to select random swap targets.");
+        LogWhale("Random scramble aborted: random selection failed (swap=%d redCandidates=%d bluCandidates=%d).", swapCount, redCandidateCount, bluCandidateCount);
+        return false;
+    }
+
+    DataPack pack = new DataPack();
+    pack.WriteCell(issuer > 0 ? GetClientUserId(issuer) : 0);
+    pack.WriteCell(swapCount);
+    for (int i = 0; i < swapCount; i++)
+    {
+        pack.WriteCell(GetClientUserId(topRed[i]));
+    }
+    for (int i = 0; i < swapCount; i++)
+    {
+        pack.WriteCell(GetClientUserId(topBlu[i]));
+    }
+
+    g_iRespawnDisableRefs++;
+    SetDisableRespawnTimes(true);
+    CreateTimer(0.1, Timer_DoSwap, pack, TIMER_FLAG_NO_MAPCHANGE);
+    LogWhale("Random scramble scheduled: swapCount=%d.", swapCount);
+    return true;
+}
+
 public Action Timer_DoSwap(Handle timer, DataPack pack)
 {
     pack.Reset();
@@ -671,12 +873,12 @@ public Action Timer_DoSwap(Handle timer, DataPack pack)
         if (r > 0 && IsClientInGame(r) && GetClientTeam(r) == TEAM_RED)
         {
             ChangeClientTeam(r, TEAM_BLU);
-            g_bScrambledThisMap[r] = true;
+            MarkScrambleImmune(r);
         }
         if (b > 0 && IsClientInGame(b) && GetClientTeam(b) == TEAM_BLU)
         {
             ChangeClientTeam(b, TEAM_RED);
-            g_bScrambledThisMap[b] = true;
+            MarkScrambleImmune(b);
         }
     }
 
@@ -822,12 +1024,61 @@ static int GetScrambleScore(int client, bool ignoreClass)
     return GetClientFrags(client);
 }
 
-static void ClearScrambleImmunity()
+static bool SelectRandomPlayers(const int candidates[MAXPLAYERS + 1], int candidateCount, int selected[MAX_SWAP], int selectedCount)
 {
-    for (int i = 1; i <= MaxClients; i++)
+    if (selectedCount <= 0 || selectedCount > MAX_SWAP || candidateCount < selectedCount)
     {
-        g_bScrambledThisMap[i] = false;
+        return false;
     }
+
+    int pool[MAXPLAYERS + 1];
+    for (int i = 0; i < candidateCount; i++)
+    {
+        pool[i] = candidates[i];
+    }
+
+    for (int i = 0; i < selectedCount; i++)
+    {
+        int remaining = candidateCount - i;
+        int pick = GetRandomInt(0, remaining - 1);
+        selected[i] = pool[pick];
+        pool[pick] = pool[remaining - 1];
+    }
+
+    return true;
+}
+
+static bool IsScrambleImmune(int client)
+{
+    if (client <= 0 || !IsClientInGame(client) || g_hScrambleImmunity == null)
+    {
+        return false;
+    }
+
+    char steamId[32];
+    if (!GetClientAuthId(client, AuthId_SteamID64, steamId, sizeof(steamId)))
+    {
+        return false;
+    }
+
+    int dummy = 0;
+    return g_hScrambleImmunity.GetValue(steamId, dummy);
+}
+
+static void MarkScrambleImmune(int client)
+{
+    if (client <= 0 || !IsClientInGame(client) || g_hScrambleImmunity == null)
+    {
+        return;
+    }
+
+    char steamId[32];
+    if (!GetClientAuthId(client, AuthId_SteamID64, steamId, sizeof(steamId)))
+    {
+        return;
+    }
+
+    g_hScrambleImmunity.SetValue(steamId, 1, true);
 }
 
 static void LogWhale(const char[] fmt, any ...)
