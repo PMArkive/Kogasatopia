@@ -48,7 +48,9 @@ StringMap g_hScrambleImmunity = null;
 
 #define TEAM_RED  2
 #define TEAM_BLU  3
-#define MAX_SWAP  4
+#define MAX_TOP_SWAP  4
+#define MAX_RANDOM_SWAP  6
+#define MAX_SWAP_BUFFER  MAX_RANDOM_SWAP
 
 public Plugin myinfo =
 {
@@ -480,12 +482,12 @@ static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLow
     int redEligible = 0;
     int bluEligible = 0;
 
-    int topRed[MAX_SWAP];
-    int topBlu[MAX_SWAP];
-    int topRedScore[MAX_SWAP];
-    int topBluScore[MAX_SWAP];
+    int topRed[MAX_SWAP_BUFFER];
+    int topBlu[MAX_SWAP_BUFFER];
+    int topRedScore[MAX_SWAP_BUFFER];
+    int topBluScore[MAX_SWAP_BUFFER];
 
-    for (int i = 0; i < MAX_SWAP; i++)
+    for (int i = 0; i < MAX_SWAP_BUFFER; i++)
     {
         topRed[i] = 0;
         topBlu[i] = 0;
@@ -513,11 +515,11 @@ static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLow
         int score = GetScrambleScore(i, false);
         if (team == TEAM_RED)
         {
-            InsertTopN(i, score, topRed, topRedScore, MAX_SWAP);
+            InsertTopN(i, score, topRed, topRedScore, MAX_TOP_SWAP);
         }
         else
         {
-            InsertTopN(i, score, topBlu, topBluScore, MAX_SWAP);
+            InsertTopN(i, score, topBlu, topBluScore, MAX_TOP_SWAP);
         }
     }
 
@@ -529,7 +531,7 @@ static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLow
     {
         if (totalPlayers >= 20)
         {
-            swapCount = 4;
+            swapCount = MAX_TOP_SWAP;
         }
         else
         {
@@ -555,7 +557,7 @@ static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLow
         LogWhale("Eligibility low; recalculating without class filters.");
         redEligible = 0;
         bluEligible = 0;
-        for (int i = 0; i < MAX_SWAP; i++)
+        for (int i = 0; i < MAX_SWAP_BUFFER; i++)
         {
             topRed[i] = 0;
             topBlu[i] = 0;
@@ -578,11 +580,11 @@ static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLow
             int score = GetScrambleScore(i, true);
             if (team == TEAM_RED)
             {
-                InsertTopN(i, score, topRed, topRedScore, MAX_SWAP);
+                InsertTopN(i, score, topRed, topRedScore, MAX_TOP_SWAP);
             }
             else
             {
-                InsertTopN(i, score, topBlu, topBluScore, MAX_SWAP);
+                InsertTopN(i, score, topBlu, topBluScore, MAX_TOP_SWAP);
             }
         }
         if (allowLowPop && lowPop)
@@ -656,10 +658,10 @@ static bool StartRandomWhaleScramble(int issuer, bool broadcastFailures, bool al
     int bluCandidates[MAXPLAYERS + 1];
     int redCandidateCount = 0;
     int bluCandidateCount = 0;
-    int topRed[MAX_SWAP];
-    int topBlu[MAX_SWAP];
+    int topRed[MAX_SWAP_BUFFER];
+    int topBlu[MAX_SWAP_BUFFER];
 
-    for (int i = 0; i < MAX_SWAP; i++)
+    for (int i = 0; i < MAX_SWAP_BUFFER; i++)
     {
         topRed[i] = 0;
         topBlu[i] = 0;
@@ -705,7 +707,7 @@ static bool StartRandomWhaleScramble(int issuer, bool broadcastFailures, bool al
     {
         if (totalPlayers >= 20)
         {
-            swapCount = 6;
+            swapCount = MAX_RANDOM_SWAP;
         }
         else
         {
@@ -831,8 +833,8 @@ public Action Timer_DoSwap(Handle timer, DataPack pack)
     int issuerUserId = pack.ReadCell();
     int swapCount = pack.ReadCell();
 
-    int redIds[MAX_SWAP];
-    int bluIds[MAX_SWAP];
+    int redIds[MAX_SWAP_BUFFER];
+    int bluIds[MAX_SWAP_BUFFER];
 
     for (int i = 0; i < swapCount; i++)
     {
@@ -851,8 +853,8 @@ public Action Timer_DoSwap(Handle timer, DataPack pack)
     }
 
     int moved = 0;
-    int pairR[MAX_SWAP];
-    int pairB[MAX_SWAP];
+    int pairR[MAX_SWAP_BUFFER];
+    int pairB[MAX_SWAP_BUFFER];
     int pairCount = 0;
     for (int i = 0; i < swapCount; i++)
     {
@@ -863,7 +865,7 @@ public Action Timer_DoSwap(Handle timer, DataPack pack)
         if (!IsClientInGame(r) || !IsClientInGame(b)) continue;
         if (GetClientTeam(r) != TEAM_RED || GetClientTeam(b) != TEAM_BLU) continue;
 
-        if (pairCount < MAX_SWAP)
+        if (pairCount < MAX_SWAP_BUFFER)
         {
             pairR[pairCount] = r;
             pairB[pairCount] = b;
@@ -987,7 +989,7 @@ static void NotifyFailure(int issuer, bool broadcastFailures, const char[] fmt, 
     }
 }
 
-static void InsertTopN(int client, int score, int clients[MAX_SWAP], int scores[MAX_SWAP], int maxCount)
+static void InsertTopN(int client, int score, int clients[MAX_SWAP_BUFFER], int scores[MAX_SWAP_BUFFER], int maxCount)
 {
     for (int i = 0; i < maxCount; i++)
     {
@@ -1024,9 +1026,9 @@ static int GetScrambleScore(int client, bool ignoreClass)
     return GetClientFrags(client);
 }
 
-static bool SelectRandomPlayers(const int candidates[MAXPLAYERS + 1], int candidateCount, int selected[MAX_SWAP], int selectedCount)
+static bool SelectRandomPlayers(const int candidates[MAXPLAYERS + 1], int candidateCount, int selected[MAX_SWAP_BUFFER], int selectedCount)
 {
-    if (selectedCount <= 0 || selectedCount > MAX_SWAP || candidateCount < selectedCount)
+    if (selectedCount <= 0 || selectedCount > MAX_SWAP_BUFFER || candidateCount < selectedCount)
     {
         return false;
     }
