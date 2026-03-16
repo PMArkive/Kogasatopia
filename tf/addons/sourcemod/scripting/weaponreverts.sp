@@ -1289,8 +1289,8 @@ public TF2Items_OnGiveNamedItem_Post(client, String:classname[], index, level, q
 			{
 				TF2Attrib_SetByName(entity, "reload time increased hidden", 1.0);
 				TF2Attrib_SetByName(entity, "healing received bonus", 1.20); // Self explanatory
-				TF2Attrib_SetByName(entity, "damage force increase", 1.40); // Increased 20% -> 80%
-				TF2Attrib_SetByName(entity, "airblast vulnerability multiplier hidden", 1.40); // Increased 20% -> 80%
+				TF2Attrib_SetByName(entity, "damage force increase", 1.40); // Increased 20% -> 40%
+				TF2Attrib_SetByName(entity, "airblast vulnerability multiplier hidden", 1.40); // Increased 20% -> 40%
 			} 
 			case 317: //The Candy Cane
 			{
@@ -1306,7 +1306,7 @@ public TF2Items_OnGiveNamedItem_Post(client, String:classname[], index, level, q
 			case 772: //Baby Face's Blaster index
 			{
 				TF2Attrib_SetByName(entity, "lose hype on take damage", 0.0); // Removed
-				TF2Attrib_SetByName(entity, "move speed penalty", 0.80); // Increased to 15%
+				TF2Attrib_SetByName(entity, "move speed penalty", 0.80); // Increased to 20%
 			}
 			case 1103: //The Back Scatter
 			{
@@ -1379,11 +1379,9 @@ public TF2Items_OnGiveNamedItem_Post(client, String:classname[], index, level, q
 			}
 			case 310: // The Warrior's Spirit
 			{
-				TF2Attrib_SetByName(entity, "dmg taken increased", 1.00); // Remove vuln
-				TF2Attrib_SetByName(entity, "heal on hit for slowfire", 20.00); // 20 health on hit
-				TF2Attrib_SetByName(entity, "provide on active", 0.0); // Provide on active 0
-				TF2Attrib_SetByName(entity, "max health additive penalty", -20.00); // 20 less max health
-				TF2Attrib_SetByName(entity, "heal on kill", 0.0);
+				TF2Attrib_SetByName(entity, "dmg taken increased", 1.00); // Remove overall vuln
+				TF2Attrib_SetByName(entity, "dmg from melee increased", 1.30); // Replace with melee vuln
+				TF2Attrib_SetByName(entity, "single wep holster time increased", 1.50); // Increase holster time
 			}
 			case 426: //The Eviction Notice
 			{
