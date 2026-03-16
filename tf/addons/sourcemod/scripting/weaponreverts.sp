@@ -47,6 +47,10 @@
 #define BONK_MARK_FOR_DEATH_MIN 2.0
 #define BONK_MARK_FOR_DEATH_MAX 5.0
 
+#define LUNCHBOX_CHOCOLATE_BAR 1
+#define LUNCHBOX_FISHCAKE 7
+#define DALOKOHS_OVERHEAL 450
+
 tf2_player tf2_players[MAXPLAYERS + 1];
 
 enum struct tf2_player
@@ -67,6 +71,7 @@ enum struct tf2_player
 	bool holdingJump;
 	int markVictims[FAN_O_WAR_MAX_MARK_COUNT+1];
 	int bonkFrame;
+	int oldHealth;
 }
 
 Handle g_SDKGetMaxClip1 = null;
@@ -90,6 +95,7 @@ MemoryPatch patch_Wrangler_RescueRanger_CustomShieldRepair;
 float g_flWranglerCustomShieldValue = 0.75;
 
 DynamicDetour dhook_CTFPlayer_CalculateMaxSpeed;
+DynamicDetour dhook_CTFLunchBox_ApplyBiteEffects;
 DynamicHook dhook_CObjectCartDispenser_DispenseMetal;
 
 public Plugin myinfo =
@@ -114,6 +120,7 @@ stock void ResetClientArrays(int client)
 	tf2_players[client].secondaryDamageProgress = 0.0;
 	tf2_players[client].jump_status = TF2_JUMP_NONE;
 	tf2_players[client].holdingJump = false;
+	tf2_players[client].oldHealth = 0;
 	if (tf2_players[client].sprokeTimer != null)
 	{
 		KillTimer(tf2_players[client].sprokeTimer);
@@ -187,12 +194,16 @@ public void OnPluginStart() {
 		}
 
 		dhook_CTFPlayer_CalculateMaxSpeed = DynamicDetour.FromConf(conf, "CTFPlayer::TeamFortress_CalculateMaxSpeed");
+		dhook_CTFLunchBox_ApplyBiteEffects = DynamicDetour.FromConf(conf, "CTFLunchBox::ApplyBiteEffects");
 		dhook_CObjectCartDispenser_DispenseMetal = DynamicHook.FromConf(conf, "CObjectCartDispenser::DispenseMetal");
 
 		if (dhook_CTFPlayer_CalculateMaxSpeed == null) SetFailState("Failed to create dhook_CTFPlayer_CalculateMaxSpeed");
+		if (dhook_CTFLunchBox_ApplyBiteEffects == null) SetFailState("Failed to create dhook_CTFLunchBox_ApplyBiteEffects");
 		if (dhook_CObjectCartDispenser_DispenseMetal == null) SetFailState("Failed to create dhook_CObjectCartDispenser_DispenseMetal");
 
 		dhook_CTFPlayer_CalculateMaxSpeed.Enable(Hook_Post, CalculateMaxSpeed);
+		dhook_CTFLunchBox_ApplyBiteEffects.Enable(Hook_Pre, ApplyBiteEffects_Pre);
+		dhook_CTFLunchBox_ApplyBiteEffects.Enable(Hook_Post, ApplyBiteEffects_Post);
 
 		// Create the patches
 		patch_RevertCozyCamper_FlinchNerf = MemoryPatch.CreateFromConf(conf, "CTFPlayer::ApplyPunchImpulseX_FakeFullyChargedCondition");
@@ -1209,6 +1220,37 @@ MRESReturn CalculateMaxSpeed(int client, DHookReturn returnValue) {
 	return MRES_Ignored;
 }
 
+MRESReturn ApplyBiteEffects_Pre(int entity, DHookParam parameters) {
+	int client = parameters.Get(1);
+	if (
+		client >= 1 &&
+		client <= MaxClients
+	) {
+		tf2_players[client].oldHealth = GetClientHealth(client);
+	}
+	return MRES_Ignored;
+}
+
+MRESReturn ApplyBiteEffects_Post(int entity, DHookParam parameters) {
+	int lunchbox_type = TF2Attrib_HookValueInt(0, "set_weapon_mode", entity);
+	int client = parameters.Get(1);
+	if (
+		client >= 1 &&
+		client <= MaxClients &&
+		(lunchbox_type == LUNCHBOX_CHOCOLATE_BAR || lunchbox_type == LUNCHBOX_FISHCAKE)
+	) {
+		int health_cur = GetClientHealth(client);
+		int health_gained = health_cur - tf2_players[client].oldHealth;
+		if (health_gained < 25) {
+			int heal_amt = min(25 - health_gained, DALOKOHS_OVERHEAL - health_cur);
+			if (heal_amt > 0) {
+				AddPlayerHealth(client, heal_amt);
+			}
+		}
+	}
+	return MRES_Ignored;
+}
+
 MRESReturn CartDispenseMetal(int entity, DHookReturn returnValue, DHookParam parameters) {
 	int client = parameters.Get(1);
 	if (
@@ -1412,7 +1454,7 @@ public TF2Items_OnGiveNamedItem_Post(client, String:classname[], index, level, q
 			case 41: // The Natascha
 			{
 				TF2Attrib_SetByName(entity, "slow enemy on hit", 0.0); // Remove slowdown
-				TF2Attrib_SetByName(entity, "speed_boost_on_hit", 2.0); // Add speed boost on hit
+				TF2Attrib_SetByName(entity, "speed_boost_on_hit", 3.0); // Add speed boost on hit
 				TF2Attrib_SetByName(entity, "aiming movespeed increased", 1.80); // Increased move speed when revved
 			}
 			case 998: //The Vaccinator
