@@ -1394,8 +1394,9 @@ public TF2Items_OnGiveNamedItem_Post(client, String:classname[], index, level, q
 			}
 			case 41: // The Natascha
 			{
-				TF2Attrib_SetByName(entity, "slow enemy on hit", 0.0);
-				//TF2Attrib_SetByName(entity, "speed_boost_on_hit_enemy", 1.00); // Not working
+				TF2Attrib_SetByName(entity, "slow enemy on hit", 0.0); // Remove slowdown
+				TF2Attrib_SetByName(entity, "speed_boost_on_hit", 2.0); // Add speed boost on hit
+				TF2Attrib_SetByName(entity, "aiming movespeed increased", 1.80); // Increased move speed when revved
 			}
 			case 998: //The Vaccinator
 			{
