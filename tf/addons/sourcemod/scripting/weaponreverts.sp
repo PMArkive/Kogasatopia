@@ -1173,20 +1173,37 @@ public Action OnTakeDamageAlive(
 	return Plugin_Continue;
 }
 
-MRESReturn CalculateMaxSpeed(int entity, DHookReturn returnValue) {
+MRESReturn CalculateMaxSpeed(int client, DHookReturn returnValue) {
 	if (
-		entity >= 1 &&
-		entity <= MaxClients &&
-		IsValidEntity(entity) &&
-		IsClientInGame(entity)
+		client >= 1 &&
+		client <= MaxClients &&
+		IsValidEntity(client) &&
+		IsClientInGame(client)
 	) {
-		int primary = GetPlayerWeaponSlot(entity, TFWeaponSlot_Primary);
+		switch (TF2_GetPlayerClass(client))
+		{
+			case TFClass_Scout:
+			{
+				int primary = GetPlayerWeaponSlot(client, TFWeaponSlot_Primary);
 
-		if (primary != -1 && TF2CustAttr_GetInt(primary, "original babyface attributes") == 1) {
-			// Original BFB proper speed application
-			float boost = GetEntPropFloat(entity, Prop_Send, "m_flHypeMeter");
-			returnValue.Value = view_as<float>(returnValue.Value) * ValveRemapVal(boost, 0.0, 99.0, 1.0, 1.383);
-			return MRES_Override;
+				if (primary != -1 && TF2CustAttr_GetInt(primary, "original babyface attributes") == 1) {
+					// Original BFB proper speed application
+					float boost = GetEntPropFloat(client, Prop_Send, "m_flHypeMeter");
+					returnValue.Value = view_as<float>(returnValue.Value) * ValveRemapVal(boost, 0.0, 99.0, 1.0, 1.383);
+					return MRES_Override;
+				}
+			}
+			case TFClass_Heavy:
+			{
+				// Steak boosts speed by 35% instead of 30%
+				if (
+					TF2_IsPlayerInCondition(client, TFCond_CritCola) &&
+					view_as<float>(returnValue.Value) < 230.0 * 1.35
+				) {
+					returnValue.Value = view_as<float>(returnValue.Value) * 1.35 / 1.30;
+					return MRES_Override;
+				}
+			}
 		}
 	}
 	return MRES_Ignored;
@@ -1488,7 +1505,7 @@ public TF2Items_OnGiveNamedItem_Post(client, String:classname[], index, level, q
 			}
 			case 810, 831: // Red-Tape sappers
 			{
-				TF2Attrib_SetByName(entity, "sapper damage penalty", 0.30); // Change this from 100% to 30%
+				TF2Attrib_SetByName(entity, "sapper damage penalty", 0.30); // Change this from 100% to 70%
 			}
 			case 155: // Southern Hospitality
 			{
