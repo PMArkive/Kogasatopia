@@ -92,10 +92,13 @@ static const char g_DemoCustom[][] = {
 
 static const char g_HeavyReverts[][] = {
     "\x01Huo Long Heater:{green} No damage penalty\n",
+    "\x01Natascha:{green} Speed on hit,{red} no slowdown\n",
     "\x01Shotguns:{green} +10% movement speed while held\n",
+    "\x01Dalokohs:{green} Can overheal when eaten near max health\n",
+    "\x01Steak:{green} Speed boost +30% -> +35%\n",
     "\x01Gloves of Running:{green} No health drain, marks for death\n",
     "\x01Eviction Notice:{chartreuse} No health drain, fires 60% faster instead of 40%\n",
-    "\x01Warrior's Spirit:{green} No active dmg. vuln, +20 health on hit,{red} no health on kill, -20 max health\n"
+    "\x01Warrior's Spirit:{green} +30% melee vuln instead of overall vuln,{red} +50% holster penalty\n"
 };
 
 static const char g_HeavyCustom[][] = {

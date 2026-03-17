@@ -29,6 +29,11 @@
 				"library" "server"
 				"linux"	  "@_ZNK9CTFPlayer30TeamFortress_CalculateMaxSpeedEb"
 			}
+			"CTFLunchBox::ApplyBiteEffects" // "lunchbox_healing_scale"
+			{
+				"library" "server"
+				"linux"   "@_ZN11CTFLunchBox16ApplyBiteEffectsEP9CTFPlayer"
+			}
         }
 
 		"Offsets"
@@ -136,6 +141,20 @@
 				"hooktype"	"entity"
 				"this"		"entity"
 				"return"	"int"
+				"arguments"
+				{
+					"pPlayer"
+					{
+						"type"	"cbaseentity"
+					}
+				}
+			}
+			"CTFLunchBox::ApplyBiteEffects"
+			{
+				"signature"	"CTFLunchBox::ApplyBiteEffects"
+				"callconv"	"thiscall"
+				"this"		"entity"
+				"return"	"void"
 				"arguments"
 				{
 					"pPlayer"

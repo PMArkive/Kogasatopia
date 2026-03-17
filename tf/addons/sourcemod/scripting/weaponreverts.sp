@@ -47,6 +47,10 @@
 #define BONK_MARK_FOR_DEATH_MIN 2.0
 #define BONK_MARK_FOR_DEATH_MAX 5.0
 
+#define LUNCHBOX_CHOCOLATE_BAR 1
+#define LUNCHBOX_FISHCAKE 7
+#define DALOKOHS_OVERHEAL 450
+
 tf2_player tf2_players[MAXPLAYERS + 1];
 
 enum struct tf2_player
@@ -67,6 +71,7 @@ enum struct tf2_player
 	bool holdingJump;
 	int markVictims[FAN_O_WAR_MAX_MARK_COUNT+1];
 	int bonkFrame;
+	int oldHealth;
 }
 
 Handle g_SDKGetMaxClip1 = null;
@@ -90,6 +95,7 @@ MemoryPatch patch_Wrangler_RescueRanger_CustomShieldRepair;
 float g_flWranglerCustomShieldValue = 0.75;
 
 DynamicDetour dhook_CTFPlayer_CalculateMaxSpeed;
+DynamicDetour dhook_CTFLunchBox_ApplyBiteEffects;
 DynamicHook dhook_CObjectCartDispenser_DispenseMetal;
 
 public Plugin myinfo =
@@ -114,6 +120,7 @@ stock void ResetClientArrays(int client)
 	tf2_players[client].secondaryDamageProgress = 0.0;
 	tf2_players[client].jump_status = TF2_JUMP_NONE;
 	tf2_players[client].holdingJump = false;
+	tf2_players[client].oldHealth = 0;
 	if (tf2_players[client].sprokeTimer != null)
 	{
 		KillTimer(tf2_players[client].sprokeTimer);
@@ -187,12 +194,16 @@ public void OnPluginStart() {
 		}
 
 		dhook_CTFPlayer_CalculateMaxSpeed = DynamicDetour.FromConf(conf, "CTFPlayer::TeamFortress_CalculateMaxSpeed");
+		dhook_CTFLunchBox_ApplyBiteEffects = DynamicDetour.FromConf(conf, "CTFLunchBox::ApplyBiteEffects");
 		dhook_CObjectCartDispenser_DispenseMetal = DynamicHook.FromConf(conf, "CObjectCartDispenser::DispenseMetal");
 
 		if (dhook_CTFPlayer_CalculateMaxSpeed == null) SetFailState("Failed to create dhook_CTFPlayer_CalculateMaxSpeed");
+		if (dhook_CTFLunchBox_ApplyBiteEffects == null) SetFailState("Failed to create dhook_CTFLunchBox_ApplyBiteEffects");
 		if (dhook_CObjectCartDispenser_DispenseMetal == null) SetFailState("Failed to create dhook_CObjectCartDispenser_DispenseMetal");
 
 		dhook_CTFPlayer_CalculateMaxSpeed.Enable(Hook_Post, CalculateMaxSpeed);
+		dhook_CTFLunchBox_ApplyBiteEffects.Enable(Hook_Pre, ApplyBiteEffects_Pre);
+		dhook_CTFLunchBox_ApplyBiteEffects.Enable(Hook_Post, ApplyBiteEffects_Post);
 
 		// Create the patches
 		patch_RevertCozyCamper_FlinchNerf = MemoryPatch.CreateFromConf(conf, "CTFPlayer::ApplyPunchImpulseX_FakeFullyChargedCondition");
@@ -1173,20 +1184,68 @@ public Action OnTakeDamageAlive(
 	return Plugin_Continue;
 }
 
-MRESReturn CalculateMaxSpeed(int entity, DHookReturn returnValue) {
+MRESReturn CalculateMaxSpeed(int client, DHookReturn returnValue) {
 	if (
-		entity >= 1 &&
-		entity <= MaxClients &&
-		IsValidEntity(entity) &&
-		IsClientInGame(entity)
+		client >= 1 &&
+		client <= MaxClients &&
+		IsValidEntity(client) &&
+		IsClientInGame(client)
 	) {
-		int primary = GetPlayerWeaponSlot(entity, TFWeaponSlot_Primary);
+		switch (TF2_GetPlayerClass(client))
+		{
+			case TFClass_Scout:
+			{
+				int primary = GetPlayerWeaponSlot(client, TFWeaponSlot_Primary);
 
-		if (primary != -1 && TF2CustAttr_GetInt(primary, "original babyface attributes") == 1) {
-			// Original BFB proper speed application
-			float boost = GetEntPropFloat(entity, Prop_Send, "m_flHypeMeter");
-			returnValue.Value = view_as<float>(returnValue.Value) * ValveRemapVal(boost, 0.0, 99.0, 1.0, 1.383);
-			return MRES_Override;
+				if (primary != -1 && TF2CustAttr_GetInt(primary, "original babyface attributes") == 1) {
+					// Original BFB proper speed application
+					float boost = GetEntPropFloat(client, Prop_Send, "m_flHypeMeter");
+					returnValue.Value = view_as<float>(returnValue.Value) * ValveRemapVal(boost, 0.0, 99.0, 1.0, 1.383);
+					return MRES_Override;
+				}
+			}
+			case TFClass_Heavy:
+			{
+				// Steak boosts speed by 35% instead of 30%
+				if (
+					TF2_IsPlayerInCondition(client, TFCond_CritCola) &&
+					view_as<float>(returnValue.Value) < 230.0 * 1.35
+				) {
+					returnValue.Value = view_as<float>(returnValue.Value) * 1.35 / 1.30;
+					return MRES_Override;
+				}
+			}
+		}
+	}
+	return MRES_Ignored;
+}
+
+MRESReturn ApplyBiteEffects_Pre(int entity, DHookParam parameters) {
+	int client = parameters.Get(1);
+	if (
+		client >= 1 &&
+		client <= MaxClients
+	) {
+		tf2_players[client].oldHealth = GetClientHealth(client);
+	}
+	return MRES_Ignored;
+}
+
+MRESReturn ApplyBiteEffects_Post(int entity, DHookParam parameters) {
+	int lunchbox_type = TF2Attrib_HookValueInt(0, "set_weapon_mode", entity);
+	int client = parameters.Get(1);
+	if (
+		client >= 1 &&
+		client <= MaxClients &&
+		(lunchbox_type == LUNCHBOX_CHOCOLATE_BAR || lunchbox_type == LUNCHBOX_FISHCAKE)
+	) {
+		int health_cur = GetClientHealth(client);
+		int health_gained = health_cur - tf2_players[client].oldHealth;
+		if (health_gained < 25) {
+			int heal_amt = min(25 - health_gained, DALOKOHS_OVERHEAL - health_cur);
+			if (heal_amt > 0) {
+				AddPlayerHealth(client, heal_amt);
+			}
 		}
 	}
 	return MRES_Ignored;
@@ -1289,8 +1348,8 @@ public TF2Items_OnGiveNamedItem_Post(client, String:classname[], index, level, q
 			{
 				TF2Attrib_SetByName(entity, "reload time increased hidden", 1.0);
 				TF2Attrib_SetByName(entity, "healing received bonus", 1.20); // Self explanatory
-				TF2Attrib_SetByName(entity, "damage force increase", 1.40); // Increased 20% -> 80%
-				TF2Attrib_SetByName(entity, "airblast vulnerability multiplier hidden", 1.40); // Increased 20% -> 80%
+				TF2Attrib_SetByName(entity, "damage force increase", 1.40); // Increased 20% -> 40%
+				TF2Attrib_SetByName(entity, "airblast vulnerability multiplier hidden", 1.40); // Increased 20% -> 40%
 			} 
 			case 317: //The Candy Cane
 			{
@@ -1306,7 +1365,7 @@ public TF2Items_OnGiveNamedItem_Post(client, String:classname[], index, level, q
 			case 772: //Baby Face's Blaster index
 			{
 				TF2Attrib_SetByName(entity, "lose hype on take damage", 0.0); // Removed
-				TF2Attrib_SetByName(entity, "move speed penalty", 0.80); // Increased to 15%
+				TF2Attrib_SetByName(entity, "move speed penalty", 0.80); // Increased to 20%
 			}
 			case 1103: //The Back Scatter
 			{
@@ -1379,11 +1438,9 @@ public TF2Items_OnGiveNamedItem_Post(client, String:classname[], index, level, q
 			}
 			case 310: // The Warrior's Spirit
 			{
-				TF2Attrib_SetByName(entity, "dmg taken increased", 1.00); // Remove vuln
-				TF2Attrib_SetByName(entity, "heal on hit for slowfire", 20.00); // 20 health on hit
-				TF2Attrib_SetByName(entity, "provide on active", 0.0); // Provide on active 0
-				TF2Attrib_SetByName(entity, "max health additive penalty", -20.00); // 20 less max health
-				TF2Attrib_SetByName(entity, "heal on kill", 0.0);
+				TF2Attrib_SetByName(entity, "dmg taken increased", 1.00); // Remove overall vuln
+				TF2Attrib_SetByName(entity, "dmg from melee increased", 1.30); // Replace with melee vuln
+				TF2Attrib_SetByName(entity, "single wep holster time increased", 1.50); // Increase holster time
 			}
 			case 426: //The Eviction Notice
 			{
@@ -1396,8 +1453,9 @@ public TF2Items_OnGiveNamedItem_Post(client, String:classname[], index, level, q
 			}
 			case 41: // The Natascha
 			{
-				TF2Attrib_SetByName(entity, "slow enemy on hit", 0.0);
-				//TF2Attrib_SetByName(entity, "speed_boost_on_hit_enemy", 1.00); // Not working
+				TF2Attrib_SetByName(entity, "slow enemy on hit", 0.0); // Remove slowdown
+				TF2Attrib_SetByName(entity, "speed_boost_on_hit", 3.0); // Add speed boost on hit
+				TF2Attrib_SetByName(entity, "aiming movespeed increased", 1.80); // Increased move speed when revved
 			}
 			case 998: //The Vaccinator
 			{
@@ -1489,7 +1547,7 @@ public TF2Items_OnGiveNamedItem_Post(client, String:classname[], index, level, q
 			}
 			case 810, 831: // Red-Tape sappers
 			{
-				TF2Attrib_SetByName(entity, "sapper damage penalty", 0.30); // Change this from 100% to 30%
+				TF2Attrib_SetByName(entity, "sapper damage penalty", 0.30); // Change this from 100% to 70%
 			}
 			case 155: // Southern Hospitality
 			{
