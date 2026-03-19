@@ -28,6 +28,7 @@
 #define SOUND_FLAME_OUT "player/flame_out.wav"
 #define ATTR_SECONDARY_AMMO_REFILL "secondary damage ammo refill"
 #define ATTR_SECONDARY_REFILL_SOUND "tools/ifm/beep.wav"
+#define ATTR_RELOAD_ON_HIT "reload on hit"
 
 #define SPROKE_ATTR_NAME		"sproke attribute"
 #define SPROKE_PRIMARY_ATTR		"mod max primary clip override"
@@ -72,6 +73,8 @@ enum struct tf2_player
 	int markVictims[FAN_O_WAR_MAX_MARK_COUNT+1];
 	int bonkFrame;
 	int oldHealth;
+	int g_LastHitgroup;
+	int g_LastHitgroupAttacker;
 }
 
 Handle g_SDKGetMaxClip1 = null;
@@ -121,6 +124,8 @@ stock void ResetClientArrays(int client)
 	tf2_players[client].jump_status = TF2_JUMP_NONE;
 	tf2_players[client].holdingJump = false;
 	tf2_players[client].oldHealth = 0;
+	tf2_players[client].g_LastHitgroup = 0;
+	tf2_players[client].g_LastHitgroupAttacker = 0;
 	if (tf2_players[client].sprokeTimer != null)
 	{
 		KillTimer(tf2_players[client].sprokeTimer);
@@ -733,6 +738,7 @@ void OnEnergyRingSpawnPost(int entity) {
 }
 
 Action OnEnergyRingTouch(int entity, int other) {
+	// Pomson & Bison light up friendly Huntsman arrows
 	if (other >= 1 && other <= MaxClients) {
 		int weapon = GetEntPropEnt(other, Prop_Send, "m_hActiveWeapon");
 		if (IsValidEntity(weapon)) {
@@ -740,7 +746,6 @@ Action OnEnergyRingTouch(int entity, int other) {
 				HasEntProp(weapon, Prop_Send, "m_bArrowAlight") &&
 				GetEntProp(entity, Prop_Send, "m_iTeamNum") == GetEntProp(other, Prop_Send, "m_iTeamNum")
 			) {
-				// Pomson & Bison ignite friendly Huntsman arrows
 				SetEntProp(weapon, Prop_Send, "m_bArrowAlight", true);
 			}
 		}
@@ -936,25 +941,93 @@ static void SecondaryDamageRefill_OnDamage(int attacker, int weapon, float damag
 	}
 }
 
+static void ReloadOnHit_OnDamage(int weapon)
+{
+	if (weapon <= MaxClients || !IsValidEntity(weapon))
+		return;
+
+	int reloadAmount = TF2CustAttr_GetInt(weapon, ATTR_RELOAD_ON_HIT);
+	if (reloadAmount <= 0)
+		return;
+
+	int maxClip = GetWeaponMaxClip(weapon);
+	if (maxClip <= 0)
+		return;
+
+	int clip = GetClip(weapon);
+	if (clip < 0 || clip >= maxClip)
+		return;
+
+	clip += reloadAmount;
+	if (clip > maxClip)
+	{
+		clip = maxClip;
+	}
+
+	SetClip_Weapon(weapon, clip);
+}
+
+static int GetDamageSourceWeapon(int attacker, int weapon, int inflictor)
+{
+	if (weapon > MaxClients && IsValidEntity(weapon))
+	{
+		return weapon;
+	}
+
+	if (inflictor > MaxClients && IsValidEntity(inflictor))
+	{
+		if (HasEntProp(inflictor, Prop_Send, "m_hLauncher"))
+		{
+			int launcher = GetEntPropEnt(inflictor, Prop_Send, "m_hLauncher");
+			if (launcher > MaxClients && IsValidEntity(launcher))
+			{
+				return launcher;
+			}
+		}
+
+		if (HasEntProp(inflictor, Prop_Send, "m_hOriginalLauncher"))
+		{
+			int launcher = GetEntPropEnt(inflictor, Prop_Send, "m_hOriginalLauncher");
+			if (launcher > MaxClients && IsValidEntity(launcher))
+			{
+				return launcher;
+			}
+		}
+	}
+
+	if (attacker > 0 && attacker <= MaxClients && IsClientInGame(attacker))
+	{
+		int activeWeapon = GetEntPropEnt(attacker, Prop_Data, "m_hActiveWeapon");
+		if (activeWeapon > MaxClients && IsValidEntity(activeWeapon))
+		{
+			return activeWeapon;
+		}
+	}
+
+	return -1;
+}
+
 
 public Action OnTakeDamage(client, &attacker, &inflictor, &Float:damage, &damagetype, &weapon, Float:damageForce[3], Float:damagePosition[3], damagecustom)
 {
 	if (client < 1 || client > MaxClients || !IsClientInGame(client)) return Plugin_Continue;
-	if (attacker < 1 || weapon < 1) return Plugin_Continue;
+	if (attacker < 1) return Plugin_Continue;
 
 	bool attackerIsPlayer = (attacker >= 1 && attacker <= MaxClients && IsClientInGame(attacker));
+	int damageWeapon = GetDamageSourceWeapon(attacker, weapon, inflictor);
 
-	if (attackerIsPlayer && IsValidEntity(weapon) && weapon > MaxClients)
+	if (attackerIsPlayer && damageWeapon > MaxClients && IsValidEntity(damageWeapon))
 	{
-		SecondaryDamageRefill_OnDamage(attacker, weapon, damage);
+		SecondaryDamageRefill_OnDamage(attacker, damageWeapon, damage);
+		ReloadOnHit_OnDamage(damageWeapon);
 
-		int duelAttr = TF2CustAttr_GetInt(weapon, "duel declared");
+		int duelAttr = TF2CustAttr_GetInt(damageWeapon, "duel declared");
 		if (duelAttr != 0)
 		{
 			int victimWeapon = GetEntPropEnt(client, Prop_Data, "m_hActiveWeapon");
 			if (IsValidEntity(victimWeapon) && TF2CustAttr_GetInt(victimWeapon, "duel declared") != 0)
 			{
-				if (GetClip(weapon) == 6)
+				if (GetClip(damageWeapon) == 6)
 				{
 					damage = 100.0;
 					damagetype |= DMG_CRIT;
@@ -1083,6 +1156,9 @@ public Action OnTraceAttack(victim, &attacker, &inflictor, &Float:damage, &damag
 				SetEntPropFloat(medigun, Prop_Send, "m_flChargeLevel", uber);
 			}
 		}
+	} else if (CheckDesertEagle(attacker) == 2) {
+		tf2_players[victim].g_LastHitgroup = hitgroup;
+		tf2_players[victim].g_LastHitgroupAttacker = attacker;
 	}
 	return Plugin_Continue;
 } 
@@ -1126,6 +1202,21 @@ public Action OnTakeDamageAlive(
 	int& weapon, float damage_force[3], float damage_position[3], int damage_custom
 ) {
 	if (attacker < 1 || weapon < 1) return Plugin_Continue;
+
+	if (
+		CheckDesertEagle(attacker) == 2 &&
+		tf2_players[victim].g_LastHitgroup == 1 &&
+		tf2_players[victim].g_LastHitgroupAttacker == attacker
+	) {
+		damage_type |= DMG_CRIT;
+		damage *= 3.0;
+		tf2_players[victim].g_LastHitgroup = 0;
+		tf2_players[victim].g_LastHitgroupAttacker = 0;
+		return Plugin_Changed;
+	}
+
+	tf2_players[victim].g_LastHitgroup = 0;
+	tf2_players[victim].g_LastHitgroupAttacker = 0;
 
 	if (
 		damage > 0 &&
