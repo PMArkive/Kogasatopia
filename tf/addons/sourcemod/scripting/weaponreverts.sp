@@ -73,8 +73,6 @@ enum struct tf2_player
 	int markVictims[FAN_O_WAR_MAX_MARK_COUNT+1];
 	int bonkFrame;
 	int oldHealth;
-	int g_LastHitgroup;
-	int g_LastHitgroupAttacker;
 }
 
 Handle g_SDKGetMaxClip1 = null;
@@ -124,8 +122,6 @@ stock void ResetClientArrays(int client)
 	tf2_players[client].jump_status = TF2_JUMP_NONE;
 	tf2_players[client].holdingJump = false;
 	tf2_players[client].oldHealth = 0;
-	tf2_players[client].g_LastHitgroup = 0;
-	tf2_players[client].g_LastHitgroupAttacker = 0;
 	if (tf2_players[client].sprokeTimer != null)
 	{
 		KillTimer(tf2_players[client].sprokeTimer);
@@ -1156,9 +1152,6 @@ public Action OnTraceAttack(victim, &attacker, &inflictor, &Float:damage, &damag
 				SetEntPropFloat(medigun, Prop_Send, "m_flChargeLevel", uber);
 			}
 		}
-	} else if (CheckDesertEagle(attacker) == 2) {
-		tf2_players[victim].g_LastHitgroup = hitgroup;
-		tf2_players[victim].g_LastHitgroupAttacker = attacker;
 	}
 	return Plugin_Continue;
 } 
@@ -1202,21 +1195,6 @@ public Action OnTakeDamageAlive(
 	int& weapon, float damage_force[3], float damage_position[3], int damage_custom
 ) {
 	if (attacker < 1 || weapon < 1) return Plugin_Continue;
-
-	if (
-		CheckDesertEagle(attacker) == 2 &&
-		tf2_players[victim].g_LastHitgroup == 1 &&
-		tf2_players[victim].g_LastHitgroupAttacker == attacker
-	) {
-		damage_type |= DMG_CRIT;
-		damage *= 3.0;
-		tf2_players[victim].g_LastHitgroup = 0;
-		tf2_players[victim].g_LastHitgroupAttacker = 0;
-		return Plugin_Changed;
-	}
-
-	tf2_players[victim].g_LastHitgroup = 0;
-	tf2_players[victim].g_LastHitgroupAttacker = 0;
 
 	if (
 		damage > 0 &&

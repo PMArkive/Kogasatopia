@@ -322,7 +322,6 @@
                 }
                 "attributes_custom"
                 {
-		    "can headshot sm"	"1"
                     "replace sound"     "colt_navy"
                 }
         }

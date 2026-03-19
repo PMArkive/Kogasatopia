@@ -86,17 +86,6 @@ stock int CheckShock(int client)
     return tally;
 }
 
-stock int CheckDesertEagle(int client)
-{
-    int tally = 0;
-    int deagle = GetPlayerWeaponSlot(client, 1);
-    if (TF2CustAttr_GetInt(deagle, "can headshot sm") != 0)
-        tally++;
-    if (deagle == GetEntPropEnt(client, Prop_Data, "m_hActiveWeapon"))
-        tally++;
-    return tally;
-}
-
 stock bool CheckRocketJumping(int client)
 {
     if (!(GetEntityFlags(client) & FL_ONGROUND))
