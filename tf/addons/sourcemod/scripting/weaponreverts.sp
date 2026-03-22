@@ -1152,7 +1152,12 @@ public Action OnTraceAttack(victim, &attacker, &inflictor, &Float:damage, &damag
 				SetEntPropFloat(medigun, Prop_Send, "m_flChargeLevel", uber);
 			}
 		}
+	} else if (CheckDesertEagle(attacker) == 2)
+	{
+		damagetype |= DMG_USE_HITLOCATIONS;
+		return Plugin_Changed;
 	}
+
 	return Plugin_Continue;
 } 
 
@@ -1194,6 +1199,7 @@ public Action OnTakeDamageAlive(
 	int victim, int& attacker, int& inflictor, float& damage, int& damage_type,
 	int& weapon, float damage_force[3], float damage_position[3], int damage_custom
 ) {
+
 	if (attacker < 1 || weapon < 1) return Plugin_Continue;
 
 	if (
@@ -1530,8 +1536,7 @@ public TF2Items_OnGiveNamedItem_Post(client, String:classname[], index, level, q
 			case 41: // The Natascha
 			{
 				TF2Attrib_SetByName(entity, "slow enemy on hit", 0.0); // Remove slowdown
-				TF2Attrib_SetByName(entity, "speed_boost_on_hit", 3.0); // Add speed boost on hit
-				TF2Attrib_SetByName(entity, "aiming movespeed increased", 1.80); // Increased move speed when revved
+				TF2Attrib_SetByName(entity, "aiming movespeed increased", 1.15); // Increased move speed when revved
 			}
 			case 998: //The Vaccinator
 			{

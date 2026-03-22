@@ -83,6 +83,7 @@ static const char g_DemoReverts[][] = {
 };
 
 static const char g_DemoCustom[][] = {
+    "\x01[Primary] Black Watch: {green}Hitting an enemy directly restores 1 ammo, +25% clip size, {red}15% slower fire rate, 10% slower reload rate\n",
     "\x01[Primary] Grenade Launcher (straight grenades)\n",
     "\x01[Primary] Demoman Gunboats\n",
     "\x01[Secondary] Demoman Banana: {green}Throw and eat to heal yourself!\n",
@@ -91,14 +92,12 @@ static const char g_DemoCustom[][] = {
 };
 
 static const char g_HeavyReverts[][] = {
+    "\x01Natascha: +15% faster movement speed while revved, does not slow enemies",
     "\x01Huo Long Heater:{green} No damage penalty\n",
-    "\x01Natascha:{green} Speed on hit,{red} no slowdown\n",
     "\x01Shotguns:{green} +10% movement speed while held\n",
-    "\x01Dalokohs:{green} Can overheal when eaten near max health\n",
-    "\x01Steak:{green} Speed boost +30% -> +35%\n",
     "\x01Gloves of Running:{green} No health drain, marks for death\n",
     "\x01Eviction Notice:{chartreuse} No health drain, fires 60% faster instead of 40%\n",
-    "\x01Warrior's Spirit:{green} +30% melee vuln instead of overall vuln,{red} +50% holster penalty\n"
+    "\x01Warrior's Spirit:{green} No active dmg. vuln, +20 health on hit,{red} no health on kill, -20 max health\n"
 };
 
 static const char g_HeavyCustom[][] = {
@@ -109,7 +108,7 @@ static const char g_HeavyCustom[][] = {
 };
 
 static const char g_EngineerReverts[][] = {
-    "\x01Pomson:{green} Original hitbox size, penetrates targets, ignores bullet resists, ignites friendly Huntsman arrows, {red}charge drains reduced to 5%\n",
+    "\x01Pomson:{green} Original hitbox size, penetrates targets, ignores bullet resists, lights up friendly Huntsman arrows, {red}-75% cloak/uber drain\n",
     "\x01The Wrangler:{red} Shield resistance 66% -> 25%\n",
     "\x01The Short Circuit:{chartreuse} Damage dealt with primary fire is returned as metal,{red} 75% less metal from carts on wearer\n",
     "\x01Southern Hospitality:{green} +10% damage, 15 metal regenerated every 5 seconds on wearer\n"
@@ -192,6 +191,7 @@ public OnPluginStart()
     RegConsoleCmd("sm_revert", Command_InfoReverts, "Lists custom class weapon data to the client");
     RegConsoleCmd("sm_r", Command_InfoReverts, "Lists custom class weapon data to the client");
     RegConsoleCmd("sm_cmds", Command_cmds, "Lists highlighted server commands to the client");
+    RegConsoleCmd("sm_news", Command_news, "Read the server news");
     RegConsoleCmd("sm_commands", Command_cmds, "Lists highlighted server commands to the client");
 	RegConsoleCmd("sm_rules", Command_Rules, "Lists the rules to the client");
 	RegConsoleCmd("sm_steam", Command_Steam, "Prints the steam group URL to the client");
@@ -208,7 +208,7 @@ static const char g_WelcomeMsg[][] = {
     "{peachpuff}Welcome to {unique}Gensokyo{peachpuff} %N!",
     "{peachpuff}This server has buffs for bad weapons and some new weapons;",
     "{peachpuff}Read more with {lightskyblue}!info{peachpuff} or see our group at {unique}!steam",
-    "{unique}News: {default}Created a new autobalance plugin and !points, added automatic renaming with !prename, added !colors, updated the {axis}Flame Shotgun{default} in !cw, check out {cornflowerblue}Cirno's Wings{default} with {gold}!hats"
+    "{unique}News: {default}Reworked the Natascha to provide speed, added market garden tracking with !mg, added ubers, market gardens and drops to !points, added Black Watch and Silver Strike from TF2C, added !feedback"
 };
 
 static const char g_UncleWelcomeMsg[][] = {
@@ -297,6 +297,17 @@ public Action:Command_cmds(int client, int args)
     {
         CPrintToChat(client, "%s", g_CommandInfo[i]);
     }
+    return Plugin_Handled;
+}
+
+public Action:Command_news(int client, int args)
+{
+    char buffer[256];
+        Format(buffer, sizeof(buffer), g_WelcomeMsg[0], client);
+    CPrintToChat(client, "%s", buffer);
+    
+    for (int i = 1; i < sizeof(g_WelcomeMsg); i++)
+        CPrintToChat(client, "%s", g_WelcomeMsg[i]);
     return Plugin_Handled;
 }
 
