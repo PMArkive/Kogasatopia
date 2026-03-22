@@ -3,7 +3,7 @@
 
 #include <sourcemod>
 
-#define FEEDBACK_DB_CONFIG "sourcemod"
+#define FEEDBACK_DB_CONFIG "default"
 #define FEEDBACK_TABLE "whaletracker_feedback"
 #define FEEDBACK_MAX_MESSAGE 512
 
@@ -115,6 +115,141 @@ public void SQL_OnSchemaOpComplete(Database db, DBResultSet results, const char[
     }
 }
 
+// -------------------------------------------------------------------------
+// Admin feedback browser
+// -------------------------------------------------------------------------
+
+// We pack (client userid << 16 | page) into the data int passed to the query
+// so we can open the right page for the right client when results come back.
+
+#define FEEDBACK_PAGE_SIZE 5
+
+void OpenFeedbackBrowser(int client, int page)
+{
+    if (g_hDatabase == null)
+    {
+        PrintToChat(client, "[Kogasa] Feedback database is unavailable right now.");
+        return;
+    }
+
+    int offset = page * FEEDBACK_PAGE_SIZE;
+
+    char query[256];
+    Format(query, sizeof(query),
+        "SELECT player_name, message, created_at FROM %s ORDER BY id DESC LIMIT %d OFFSET %d",
+        FEEDBACK_TABLE, FEEDBACK_PAGE_SIZE + 1, offset);  // fetch one extra to detect next page
+
+    any data = (GetClientUserId(client) << 16) | (page & 0xFFFF);
+    SQL_TQuery(g_hDatabase, SQL_OnFeedbackBrowse, query, data);
+}
+
+public void SQL_OnFeedbackBrowse(Database db, DBResultSet results, const char[] error, any data)
+{
+    int userid = (data >> 16) & 0xFFFF;
+    int page   = data & 0xFFFF;
+
+    int client = GetClientOfUserId(userid);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Feedback] Failed to fetch feedback: %s", error);
+        PrintToChat(client, "[Kogasa] Could not load feedback right now.");
+        return;
+    }
+
+    Menu menu = new Menu(MenuHandler_FeedbackBrowser);
+    menu.SetTitle("Feedback (page %d)", page + 1);
+    menu.ExitButton = true;
+
+    int count = 0;
+    while (results.FetchRow() && count < FEEDBACK_PAGE_SIZE)
+    {
+        char name[64];
+        char message[FEEDBACK_MAX_MESSAGE];
+        char timestamp[32];
+        results.FetchString(0, name, sizeof(name));
+        results.FetchString(1, message, sizeof(message));
+        results.FetchString(2, timestamp, sizeof(timestamp));
+
+        // Truncate timestamp to date + time without fractional seconds
+        // e.g. "2024-01-15 20:30:00"
+        timestamp[19] = '\0';
+
+        // Build display label: "PlayerName (date)"
+        char label[128];
+        Format(label, sizeof(label), "%s (%s)", name, timestamp);
+
+        // Store message as item info so we can display it on select
+        menu.AddItem(message, label);
+        count++;
+    }
+
+    if (count == 0)
+    {
+        menu.AddItem("", "No feedback found.", ITEMDRAW_DISABLED);
+    }
+
+    bool hasNextPage = results.FetchRow();  // if we got the extra row, there's a next page
+
+    // Prev / Next navigation as disabled display items at the bottom
+    // We handle pagination by spawning a new query rather than using built-in
+    // menu pagination, so we disable the native paginator and add our own items.
+    menu.Pagination = MENU_NO_PAGINATION;
+
+    if (page > 0)
+    {
+        char prevInfo[16];
+        Format(prevInfo, sizeof(prevInfo), "page:%d", page - 1);
+        menu.AddItem(prevInfo, "« Previous Page");
+    }
+
+    if (hasNextPage)
+    {
+        char nextInfo[16];
+        Format(nextInfo, sizeof(nextInfo), "page:%d", page + 1);
+        menu.AddItem(nextInfo, "Next Page »");
+    }
+
+    menu.Display(client, MENU_TIME_FOREVER);
+}
+
+public int MenuHandler_FeedbackBrowser(Menu menu, MenuAction action, int param1, int param2)
+{
+    if (action == MenuAction_Select)
+    {
+        int client = param1;
+        char info[FEEDBACK_MAX_MESSAGE];
+        menu.GetItem(param2, info, sizeof(info));
+
+        // Navigation items are prefixed with "page:"
+        if (StrContains(info, "page:") == 0)
+        {
+            int targetPage = StringToInt(info[5]);
+            OpenFeedbackBrowser(client, targetPage);
+        }
+        else
+        {
+            // Display the full message
+            PrintToChat(client, "[Kogasa] Feedback: %s", info);
+            menu.Display(client, MENU_TIME_FOREVER);  // re-show menu after reading
+        }
+    }
+    else if (action == MenuAction_End)
+    {
+        delete menu;
+    }
+
+    return 0;
+}
+
+// -------------------------------------------------------------------------
+// !feedback command
+// -------------------------------------------------------------------------
+
 public Action Command_Feedback(int client, int args)
 {
     if (client <= 0 || !IsClientInGame(client))
@@ -122,9 +257,17 @@ public Action Command_Feedback(int client, int args)
         return Plugin_Handled;
     }
 
+    // Admins with no args open the browser
     if (args < 1)
     {
-        PrintToChat(client, "[Kogasa] Format: !feedback message");
+        if (CheckCommandAccess(client, "sm_feedback_view", ADMFLAG_GENERIC))
+        {
+            OpenFeedbackBrowser(client, 0);
+        }
+        else
+        {
+            PrintToChat(client, "[Kogasa] Format: !feedback message");
+        }
         return Plugin_Handled;
     }
 

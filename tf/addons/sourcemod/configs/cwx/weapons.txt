@@ -134,9 +134,18 @@
                         "engineer"      "secondary"
                         "sniper"      "secondary"
                 }
+                "attributes_game"
+                {
+                        "increased jump height from weapon" "1.35"
+                        "sniper fires tracer"   "1"
+                        "mult_spread_scales_consecutive"   "1"
+                        "fire rate penalty" "1.5"
+                        "damage bonus" "1.3"
+                }
                 "attributes_custom"
                 {
                         "clientmodel override" "models/touhou/reisen_pistol/reisen_pistol.mdl"
+                        "take crits from projectile airborn" "1"
                         "touhou death sound"  "1"
                 }
         }
@@ -205,6 +214,48 @@
                         "flame shotgun attributes"      "1"
                         "replace sound"     "flame_shotgun"
                         "clientmodel override"  "models/weapons/c_models/c_dex_shotgun/c_dex_shotgun.mdl"
+                }
+        }
+        "weewillydemoman"
+        {
+		"inherits" "TF_WEAPON_PIPEBOMBLAUNCHER"
+                "name"                  "The Wee Willy"
+                "attributes_game"
+                {
+                        "clip size penalty"                             "0.5"
+                        "health on radius damage"        "15"
+                        "max pipebombs decreased"       "-3"
+                        "sticky detonate mode"  "1"
+                }
+        }
+        "candycanesoldier"
+        {
+		"inherits" "The Candy Cane"
+                "name"                  "The Candy Cane"     
+                "used_by_classes"
+                {
+                    "soldier" "melee"
+                    "demoman" "melee"
+                }
+        }
+        "flareshotgun"
+        {
+		"inherits" "TF_WEAPON_SHOTGUN_PYRO"
+                "name"                  "Flare Shotgun"
+                "attributes_game"
+                {
+                        "clip size penalty"                             "0.33"
+                        "damage penalty"        "0.45"
+                        "crit vs burning players" "1"
+			"weapon spread bonus"				"0.05"
+                        "crit_dmg_falloff" "1"
+		        "fire rate penalty HIDDEN"		"1.40"
+			"single wep deploy time decreased"	"0.90"
+                }
+                "attributes_custom"
+                {
+                        "replace sound"     "flame_shotgun"
+                        "holster reload"        "1"
                 }
         }
         "soldierm16"
@@ -322,6 +373,7 @@
                 }
                 "attributes_custom"
                 {
+		    "can headshot sm"	"1"
                     "replace sound"     "colt_navy"
                 }
         }

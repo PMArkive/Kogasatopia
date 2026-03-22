@@ -29,6 +29,7 @@ static const char g_ScoutReverts[][] = {
 static const char g_ScoutCustom[][] = {
     "\x01 [Primary] Original Baby Face: {green}+40% accuracy, 6 clip size,\x07FF0000 -30% damage, -35% base movement speed, boost resets on any jump\n",
     "\x01 [Primary] Vanilla Baby Face\n",
+    "\x01[Secondary] Reisen's Bunny Pistol:{green}+35% jump height, +30% damage,{red} consecutive shots become less accurate, 50% fire rate penalty\n",
     "\x01 [Secondary] Lightning Pistol: {chartreuse}+35% firing rate, +200% clip size, 40% more accurate, +100% ammo,{red} -40% damage, -15% reload speed\n",
     "\x01 [Secondary] Sproke (Redbull on Blu): {green}Ammo becomes magazine for 12 seconds, {red}ammo is set to 0 when effect ends,{default} FaN/Popper receive +25% reload speed instead",
     "\x01[Secondary] Conagher's Bull: Drain 25 ammo from buildings on hit, first shot deals 300 damage to enemies holding the same weapon, 60% tighter spread\n",
@@ -118,6 +119,7 @@ static const char g_EngineerCustom[][] = {
     "\x01[Primary] The Family Business\n",
     "\x01[Primary] Hoshino's Shotgun - Stock Reskin\n",
     "\x01[Primary] Old Panic Attack: {chartreuse}Hold fire to load up to 4 shells, fires faster as HP decreases\n",
+    "\x01[Secondary] Reisen's Bunny Pistol:{green}+35% jump height, +30% damage,{red} consecutive shots become less accurate, 50% fire rate penalty\n",
     "\x01[Secondary] Conagher's Bull: Drain 25 ammo from buildings on hit, first shot deals 300 damage to enemies holding the same weapon, 80% tighter spread\n",
     "\x01[Secondary] Lightning Pistol: {green}+35% firing rate, +200% clip size, 40% more accurate, +100% ammo,{red} -40% damage, -15% reload speed\n",
     "\x01[Secondary] The Winger, Pretty Boy's Pocket Pistol\n",
@@ -147,7 +149,7 @@ static const char g_SniperReverts[][] = {
 };
 
 static const char g_SniperCustom[][] = {
-    "\x01[Secondary] Reisen's Bunny Pistol - Stock Reskin",
+    "\x01[Secondary] Reisen's Bunny Pistol:{green}+35% jump height, +30% damage,{red} consecutive shots become less accurate, 50% fire rate penalty\n",
     "\x01[Melee] Reimu's Gohei - Stock Reskin\n"
 };
 
@@ -208,7 +210,7 @@ static const char g_WelcomeMsg[][] = {
     "{peachpuff}Welcome to {unique}Gensokyo{peachpuff} %N!",
     "{peachpuff}This server has buffs for bad weapons and some new weapons;",
     "{peachpuff}Read more with {lightskyblue}!info{peachpuff} or see our group at {unique}!steam",
-    "{unique}News: {default}Reworked the Natascha to provide speed, added market garden tracking with !mg, added ubers, market gardens and drops to !points, added Black Watch and Silver Strike from TF2C, added !feedback"
+    "{unique}News: {default}Made scrambles ignore Blu stage victories, reworked the Natascha to provide speed, added market garden tracking with !mg and in !points, added Black Watch and Silver Strike from TF2C, added !feedback"
 };
 
 static const char g_UncleWelcomeMsg[][] = {

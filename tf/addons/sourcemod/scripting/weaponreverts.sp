@@ -1142,14 +1142,15 @@ public Action OnTraceAttack(victim, &attacker, &inflictor, &Float:damage, &damag
 		return Plugin_Continue;
 	}
 
-    if (hitgroup == 1)
-	{ // Swap these two possibly
-		if (CheckDesertEagle(attacker) == 2)
+	/*if (CheckDesertEagle(attacker) == 2)
+	{
+		if (hitgroup == 1)
 		{
 			damagetype |= DMG_CRIT;
 			return Plugin_Changed;
 		}
-    }
+		return Plugin_Continue;
+    }*/
 
 	if (GetClientTeam(victim) == GetClientTeam(attacker)) {
 		if (CheckShock(attacker) == 2)
@@ -1166,9 +1167,10 @@ public Action OnTraceAttack(victim, &attacker, &inflictor, &Float:damage, &damag
 				float uber = (float((buff - health) / 5000) + (GetEntPropFloat(medigun, Prop_Send, "m_flChargeLevel")));
 				SetEntPropFloat(medigun, Prop_Send, "m_flChargeLevel", uber);
 			}
+			return Plugin_Continue;
 		}
+		return Plugin_Continue;
 	}
-
 	return Plugin_Continue;
 } 
 

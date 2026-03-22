@@ -21,9 +21,10 @@
 #define DB_CONFIG_DEFAULT "default"
 #define SAVE_QUERY_MAXLEN 4096
 #define MAX_CONCURRENT_SAVE_QUERIES 4
-#define WHALE_POINTS_SQL_EXPR "CEIL((((GREATEST(damage_dealt,0) / 200.0) + (GREATEST(healing,0) / 400.0) + GREATEST(kills,0) + FLOOR(GREATEST(assists,0) * 0.5) + GREATEST(backstabs,0) + GREATEST(headshots,0)) * 10000.0) / GREATEST(GREATEST(deaths,0), 1))"
+#define WHALE_POINTS_SQL_EXPR "CEIL((((GREATEST(damage_dealt,0) / 200.0) + (GREATEST(healing,0) / 400.0) + GREATEST(kills,0) + FLOOR(GREATEST(assists,0) * 0.5) + GREATEST(backstabs,0) + GREATEST(headshots,0) + (GREATEST(marketGardenHits,0) * 5) + (GREATEST(total_ubers,0) * 10)) * 10000.0) / GREATEST(GREATEST(deaths,0) + (GREATEST(damage_taken,0) / 500.0), 1))"
 #define WHALE_POINTS_MIN_KD_SUM 1000
 #define WHALE_LEADERBOARD_PAGE_SIZE 10
+#define WT_MARKET_GARDENER_DEF_INDEX 416
 #define WT_HEADSHOT_MODE_DAMAGE 0
 #define WT_HEADSHOT_MODE_DEATH 1
 #define WT_PUBLIC_IP_MODE_STEAMWORKS 0
@@ -32,6 +33,10 @@
 #define WT_MEDICDROP_MODE_SCAN 1
 
 native int Filters_GetChatName(int client, char[] buffer, int maxlen);
+forward bool WhaleTracker_RustQueueSqlWrite(const char[] query, int userId, bool forceSync);
+forward void WhaleTracker_RustInit();
+forward void WhaleTracker_RustFlushSqlBatch();
+forward void WhaleTracker_RustShutdown();
 
 public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int err_max)
 {
@@ -93,6 +98,7 @@ enum struct WhaleStats
     int totalUbers;
     int totalMedicDrops;
     int totalAirshots;
+    int totalMarketGardenHits;
     int totalHeadshots;
     int totalBackstabs;
     int totalAssists;
@@ -155,6 +161,7 @@ enum MatchStatField
     MatchStat_MedicDrops,
     MatchStat_UberDrops,
     MatchStat_Airshots,
+    MatchStat_MarketGardenHits,
 
     MatchStat_BestStreak,
     MatchStat_BestUbersLife,
@@ -195,6 +202,7 @@ bool g_bShuttingDown = false;
 Handle g_hOnlineTimer = null;
 Handle g_hReconnectTimer = null;
 Handle g_hSavePumpTimer = null;
+Handle g_hAirshotForward = null;
 
 char g_SaveQueryBuffers[MAX_CONCURRENT_SAVE_QUERIES][SAVE_QUERY_MAXLEN];
 int g_SaveQueryUserIds[MAX_CONCURRENT_SAVE_QUERIES];
@@ -202,6 +210,9 @@ bool g_SaveQuerySlotUsed[MAX_CONCURRENT_SAVE_QUERIES];
 
 #include <whaletracker>
 #include "whaletracker/motd_whaletracker.sp"
+#undef REQUIRE_EXTENSIONS
+#include "whaletracker/rust_sql_outlet_whaletracker.sp"
+#define REQUIRE_EXTENSIONS
 #include "whaletracker/runtime_whaletracker.sp"
 #include "whaletracker/database_whaletracker.sp"
 #include "whaletracker/gameplay_whaletracker.sp"

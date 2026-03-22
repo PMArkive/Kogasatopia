@@ -38,6 +38,11 @@
 
 		"Offsets"
 		{
+			"CTFWeaponBase::CanFireCriticalShot()"
+			{
+				"windows"	"439"
+				"linux"		"446"
+			}
 			"CTFWeaponBase::GetMaxClip1()"
 			{
 				"windows"    "325"

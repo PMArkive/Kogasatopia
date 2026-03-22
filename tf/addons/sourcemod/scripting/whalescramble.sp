@@ -37,11 +37,9 @@ NativeVote g_hVote = null;
 ConVar g_hLogEnabled = null;
 ConVar g_hAutoRounds = null;
 ConVar g_hVoteTime = null;
-ConVar g_hDisableRespawnTimes = null;
 ConVar g_hCountBots = null;
 ConVar g_hTopSwap = null;
 ConVar g_hRandom = null;
-int g_iRespawnDisableRefs = 0;
 int g_iRoundsSinceAuto = 0;
 char g_sLogPath[PLATFORM_MAX_PATH];
 StringMap g_hScrambleImmunity = null;
@@ -49,7 +47,7 @@ StringMap g_hScrambleImmunity = null;
 #define TEAM_RED  2
 #define TEAM_BLU  3
 #define MAX_TOP_SWAP  4
-#define MAX_RANDOM_SWAP  6
+#define MAX_RANDOM_SWAP  5
 #define MAX_SWAP_BUFFER  MAX_RANDOM_SWAP
 
 public Plugin myinfo =
@@ -76,7 +74,6 @@ public void OnPluginStart()
     LogWhale("Plugin started.");
     g_hAutoRounds = CreateConVar("votescramble_rounds", "2", "Automatically start a scramble vote every X rounds. 0/1 disables auto vote.", _, true, 0.0, true, 100.0);
     g_hVoteTime = CreateConVar("votescramble_votetime", "4", "Scramble vote duration in seconds.", _, true, 1.0, true, 30.0);
-    g_hDisableRespawnTimes = FindConVar("mp_disable_respawn_times");
     g_hCountBots = CreateConVar("whalescramble_count_bots", "0", "Include bots when selecting whale scramble targets.", _, true, 0.0, true, 1.0);
     g_hTopSwap = CreateConVar("sm_ws_topswap", "0", "Enable topswap scramble mode.", _, true, 0.0, true, 1.0);
     g_hRandom = CreateConVar("sm_ws_random", "1", "Enable random scramble mode.", _, true, 0.0, true, 1.0);
@@ -122,8 +119,6 @@ public void OnMapStart()
 {
     ResetVotes();
     g_iRoundsSinceAuto = 0;
-    g_iRespawnDisableRefs = 0;
-    SetDisableRespawnTimes(false);
     if (g_hScrambleImmunity != null)
     {
         g_hScrambleImmunity.Clear();
@@ -140,7 +135,6 @@ public void OnMapEnd()
 
 public void OnPluginEnd()
 {
-    SetDisableRespawnTimes(false);
     ResetVotes();
     LogWhale("Plugin ended.");
 }
@@ -223,6 +217,11 @@ public void Event_RoundWin(Event event, const char[] name, bool dontBroadcast)
     {
         return;
     }
+
+    // full_round is 1 if the entire map/round is over (Red lost or Blue finished final stage)
+    // full_round is 0 if it was just a stage completion (e.g., Goldrush Stage 1)
+    if (!(event.GetBool("full_round")))
+        return;
 
     int roundsRequired = g_hAutoRounds.IntValue;
     if (roundsRequired <= 1)
@@ -638,8 +637,6 @@ static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLow
         pack.WriteCell(GetClientUserId(topBlu[i]));
     }
 
-    g_iRespawnDisableRefs++;
-    SetDisableRespawnTimes(true);
     CreateTimer(0.1, Timer_DoSwap, pack, TIMER_FLAG_NO_MAPCHANGE);
     LogWhale("Scramble scheduled: swapCount=%d.", swapCount);
     return true;
@@ -820,8 +817,6 @@ static bool StartRandomWhaleScramble(int issuer, bool broadcastFailures, bool al
         pack.WriteCell(GetClientUserId(topBlu[i]));
     }
 
-    g_iRespawnDisableRefs++;
-    SetDisableRespawnTimes(true);
     CreateTimer(0.1, Timer_DoSwap, pack, TIMER_FLAG_NO_MAPCHANGE);
     LogWhale("Random scramble scheduled: swapCount=%d.", swapCount);
     return true;
@@ -875,11 +870,13 @@ public Action Timer_DoSwap(Handle timer, DataPack pack)
         if (r > 0 && IsClientInGame(r) && GetClientTeam(r) == TEAM_RED)
         {
             ChangeClientTeam(r, TEAM_BLU);
+            TF2_RespawnPlayer(r);
             MarkScrambleImmune(r);
         }
         if (b > 0 && IsClientInGame(b) && GetClientTeam(b) == TEAM_BLU)
         {
             ChangeClientTeam(b, TEAM_RED);
+            TF2_RespawnPlayer(b);
             MarkScrambleImmune(b);
         }
     }
@@ -955,22 +952,6 @@ public Action Timer_DoSwap(Handle timer, DataPack pack)
         }
         LogWhale("Scramble executed: no eligible pairs.");
     }
-
-    CreateTimer(8.0, Timer_EnableRespawnTimes, _, TIMER_FLAG_NO_MAPCHANGE);
-    return Plugin_Stop;
-}
-
-public Action Timer_EnableRespawnTimes(Handle timer)
-{
-    if (g_iRespawnDisableRefs > 0)
-    {
-        g_iRespawnDisableRefs--;
-    }
-    if (g_iRespawnDisableRefs == 0)
-    {
-        SetDisableRespawnTimes(false);
-    }
-
     return Plugin_Stop;
 }
 
@@ -1093,15 +1074,6 @@ static void LogWhale(const char[] fmt, any ...)
     char buffer[512];
     VFormat(buffer, sizeof(buffer), fmt, 2);
     LogToFileEx(g_sLogPath, "%s", buffer);
-}
-
-static void SetDisableRespawnTimes(bool enabled)
-{
-    if (g_hDisableRespawnTimes == null)
-    {
-        return;
-    }
-    g_hDisableRespawnTimes.IntValue = enabled ? 1 : 0;
 }
 
 static bool GetFiltersNameOrEmpty(int client, char[] buffer, int maxlen)

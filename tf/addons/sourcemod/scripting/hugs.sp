@@ -33,9 +33,12 @@
 
 int g_iHugsReceived[MAXPLAYERS + 1];
 int g_iHugsGiven[MAXPLAYERS + 1];
+int g_iFeedsReceived[MAXPLAYERS + 1];
+int g_iFeedsGiven[MAXPLAYERS + 1];
 int g_iRapesReceived[MAXPLAYERS + 1];
 int g_iRapesGiven[MAXPLAYERS + 1];
 char g_szLastHuggers[MAXPLAYERS + 1][MAX_HISTORY_ENTRIES][MAX_NAME_LENGTH];
+char g_szLastFeeders[MAXPLAYERS + 1][MAX_HISTORY_ENTRIES][MAX_NAME_LENGTH];
 char g_szLastRapists[MAXPLAYERS + 1][HISTORY_STRING_LEN];
 	char g_szClientSteamId[MAXPLAYERS + 1][32];
 	bool g_bStatsLoaded[MAXPLAYERS + 1];
@@ -92,12 +95,15 @@ native bool Filters_IsRedlisted(int client);
 		LoadTranslations("common.phrases");
 
 		RegConsoleCmd("sm_hug", Command_Hug, "Hug another player by name");
+		RegConsoleCmd("sm_feed", Command_Feed, "Feed another player by name");
 		RegConsoleCmd("sm_rape", Command_Rape, "Rape another player by name");
 		RegConsoleCmd("sm_checkhugs", Command_CheckHugs, "Check your total hugs received and given");
 		RegConsoleCmd("sm_checkrapes", Command_CheckRapes, "Check your total rapes received and given");
 		RegConsoleCmd("sm_hugcheck", Command_CheckHugs, "Check your total hugs received and given");
 		RegConsoleCmd("sm_rapecheck", Command_CheckRapes, "Check your total rapes received and given");
 		RegConsoleCmd("sm_hugs", Command_CheckHugs); // Alias for !checkhugs
+		RegConsoleCmd("sm_feeds", Command_CheckFeeds); // Alias for !feeds
+		RegConsoleCmd("sm_fed", Command_CheckFeeds); // Alias for !fed
 		RegConsoleCmd("sm_rapes", Command_CheckRapes); // Alias for !checkrapes
 
 		RegAdminCmd("sm_prape", Command_Prape, ADMFLAG_SLAY, "sm_prape <player> - Sets rapes_given to at least 1");
@@ -226,7 +232,7 @@ native bool Filters_IsRedlisted(int client);
 			args[0] = '\0';
 		}
 
-		if (!StrEqual(cmdName, "hug", false) && !StrEqual(cmdName, "rape", false))
+		if (!StrEqual(cmdName, "hug", false) && !StrEqual(cmdName, "feed", false) && !StrEqual(cmdName, "rape", false))
 		{
 			return Plugin_Continue;
 		}
@@ -245,6 +251,17 @@ native bool Filters_IsRedlisted(int client);
 			else
 			{
 				FakeClientCommand(client, "sm_hug");
+			}
+		}
+		else if (StrEqual(cmdName, "feed", false))
+		{
+			if (args[0])
+			{
+				FakeClientCommand(client, "sm_feed %s", args);
+			}
+			else
+			{
+				FakeClientCommand(client, "sm_feed");
 			}
 		}
 		else
@@ -486,7 +503,7 @@ public Action Timer_MultiplierReminder(Handle timer, any data)
 
 		if (!IsDatabaseReady())
 		{
-			ReplyToCommand(client, "[Kogasa] Database not ready.");
+			ReplyToCommand(client, "[SM] Database not ready.");
 			return Plugin_Handled;
 		}
 
@@ -513,7 +530,7 @@ public Action Timer_MultiplierReminder(Handle timer, any data)
 		if (error[0])
 		{
 			LogError("[Hugs] Failed to load leaderboard: %s", error);
-			CPrintToChat(client, "[Kogasa] Failed to load leaderboard.");
+			CPrintToChat(client, "[SM] Failed to load leaderboard.");
 			return;
 		}
 
@@ -976,7 +993,7 @@ public Action Timer_MultiplierReminder(Handle timer, any data)
 	{
 		if (args < 1)
 		{
-			ReplyToCommand(client, "[Kogasa] Usage: !hug <name>");
+			ReplyToCommand(client, "[SM] Usage: !hug <name>");
 			return Plugin_Handled;
 		}
 
@@ -994,7 +1011,7 @@ public Action Timer_MultiplierReminder(Handle timer, any data)
 		float remaining = 0.0;
 		if (IsCooldownBlocked(g_fLastHugTime[client], currentTime, remaining))
 		{
-			ReplyToCommand(client, "[Kogasa] You must wait %.1f seconds before hugging again.", remaining);
+			ReplyToCommand(client, "[SM] You must wait %.1f seconds before hugging again.", remaining);
 			return Plugin_Handled;
 		}
 
@@ -1073,11 +1090,112 @@ public Action Timer_MultiplierReminder(Handle timer, any data)
 		return Plugin_Handled;
 	}
 
+	public Action Command_Feed(int client, int args)
+	{
+		if (args < 1)
+		{
+			ReplyToCommand(client, "[SM] Usage: !feed <name>");
+			return Plugin_Handled;
+		}
+
+		if (IsSpecialClient(client))
+		{
+			return Plugin_Handled;
+		}
+
+		if (!EnsureStatsReady(client, true))
+		{
+			return Plugin_Handled;
+		}
+
+		float currentTime = GetGameTime();
+		float remaining = 0.0;
+		if (IsCooldownBlocked(g_fLastHugTime[client], currentTime, remaining))
+		{
+			ReplyToCommand(client, "[SM] You must wait %.1f seconds before feeding again.", remaining);
+			return Plugin_Handled;
+		}
+
+		char arg1[32];
+		GetCmdArg(1, arg1, sizeof(arg1));
+
+		char target_name[MAX_TARGET_LENGTH];
+		int target_list[MAXPLAYERS], target_count;
+		bool tn_is_ml;
+
+		if ((target_count = ProcessTargetString(
+					arg1,
+					client,
+					target_list,
+					MAXPLAYERS,
+					COMMAND_FILTER_NO_BOTS | COMMAND_FILTER_NO_IMMUNITY,
+					target_name,
+					sizeof(target_name),
+					tn_is_ml)) <= 0)
+		{
+			ReplyToTargetError(client, target_count);
+			return Plugin_Handled;
+		}
+
+		int successCount = 0;
+		char clientName[MAX_NAME_LENGTH];
+		GetClientName(client, clientName, sizeof(clientName));
+
+		bool isGroupTarget = IsGroupTargetArg(arg1);
+
+		for (int i = 0; i < target_count; i++)
+		{
+			int target = target_list[i];
+			if (target == client) continue;
+
+			if (!EnsureStatsReady(target, false))
+			{
+				continue;
+			}
+
+			char targetNameDisplay[MAX_NAME_LENGTH];
+			GetClientName(target, targetNameDisplay, sizeof(targetNameDisplay));
+
+			// Send message to the recipient unless they are redlisted
+			if (!IsClientRedlisted(target))
+			{
+				PrintToChat(target, "\x01[SM] \x04%s \x01fed you!", clientName);
+			}
+
+			// Send message to the sender
+			PrintToChat(client, "\x01[SM] You fed \x04%s\x01!", targetNameDisplay);
+
+			// Update feed stats
+			// If it's a group target, we don't increment per target here
+			UpdateFeedStats(client, target, !isGroupTarget);
+
+			// Update last feeders list
+			UpdateLastFeeders(target, clientName);
+
+			successCount++;
+		}
+
+		if (isGroupTarget && successCount > 0)
+		{
+			int amount = GetEffectiveMultiplier();
+			g_iFeedsGiven[client] += amount;
+			SaveClientStats(client);
+		}
+
+		if (successCount > 0)
+		{
+			PrintToChat(client, "\x01[SM] Use !feeds to check your stats.");
+			g_fLastHugTime[client] = currentTime;
+		}
+
+		return Plugin_Handled;
+	}
+
 	public Action Command_Rape(int client, int args)
 	{
 		if (args < 1)
 		{
-			ReplyToCommand(client, "[Kogasa] Usage: !rape <name>");
+			ReplyToCommand(client, "[SM] Usage: !rape <name>");
 			return Plugin_Handled;
 		}
 
@@ -1095,7 +1213,7 @@ public Action Timer_MultiplierReminder(Handle timer, any data)
 		float remaining = 0.0;
 		if (IsCooldownBlocked(g_fLastRapeTime[client], currentTime, remaining))
 		{ 
-			ReplyToCommand(client, "[Kogasa] You must wait %.1f seconds before raping again.", remaining);
+			ReplyToCommand(client, "[SM] You must wait %.1f seconds before raping again.", remaining);
 			return Plugin_Handled;
 		}
 
@@ -1190,6 +1308,22 @@ public Action Timer_MultiplierReminder(Handle timer, any data)
 		return Plugin_Handled;
 	}
 
+	public Action Command_CheckFeeds(int client, int args)
+	{
+		if (!EnsureStatsReady(client, true))
+		{
+			return Plugin_Handled;
+		}
+
+		char lastFeeders[HISTORY_STRING_LEN];
+		BuildFeederHistoryString(client, lastFeeders, sizeof(lastFeeders));
+
+		PrintToChat(client, "\x01[SM] Feeded: \x04%d\x01 | Fed: \x04%d", g_iFeedsReceived[client], g_iFeedsGiven[client]);
+		PrintToChat(client, "\x01[SM] Last Feeders: \x04%s", lastFeeders);
+
+		return Plugin_Handled;
+	}
+
 	public Action Command_CheckRapes(int client, int args)
 	{
 		if (!EnsureStatsReady(client, true))
@@ -1218,13 +1352,13 @@ public Action Timer_MultiplierReminder(Handle timer, any data)
 	{
 		if (args < 1)
 		{
-			ReplyToCommand(client, "[Kogasa] Usage: sm_prape <player>");
+			ReplyToCommand(client, "[SM] Usage: sm_prape <player>");
 			return Plugin_Handled;
 		}
 
 		if (!IsDatabaseReady())
 		{
-			ReplyToCommand(client, "[Kogasa] Database not ready.");
+			ReplyToCommand(client, "[SM] Database not ready.");
 			return Plugin_Handled;
 		}
 
@@ -1282,11 +1416,11 @@ public Action Timer_MultiplierReminder(Handle timer, any data)
 
 		if (tn_is_ml)
 		{
-			ShowActivity2(client, "[Kogasa] ", "Set rapes_given to 1 for %s", target_name);
+			ShowActivity2(client, "[SM] ", "Set rapes_given to 1 for %s", target_name);
 		}
 		else
 		{
-			ShowActivity2(client, "[Kogasa] ", "Set rapes_given to 1 for %s", target_name);
+			ShowActivity2(client, "[SM] ", "Set rapes_given to 1 for %s", target_name);
 		}
 
 		return Plugin_Handled;
@@ -1306,6 +1440,23 @@ public Action Timer_MultiplierReminder(Handle timer, any data)
 			SaveClientStats(sender);
 		}
 		g_iHugsReceived[recipient] += amount;
+		SaveClientStats(recipient);
+	}
+
+	void UpdateFeedStats(int sender, int recipient, bool incrementSender = true)
+	{
+		if (!EnsureStatsReady(sender, false) || !EnsureStatsReady(recipient, false))
+		{
+			return;
+		}
+
+		int amount = GetEffectiveMultiplier();
+		if (incrementSender)
+		{
+			g_iFeedsGiven[sender] += amount;
+			SaveClientStats(sender);
+		}
+		g_iFeedsReceived[recipient] += amount;
 		SaveClientStats(recipient);
 	}
 
@@ -1335,10 +1486,10 @@ void UpdateRapeStatsDuel(int sender, int recipient, int score1, int score2)
 
 		int amount = GetEffectiveMultiplier();
 		g_iRapesGiven[sender] += score1 * amount;
-		PrintToChat(sender, "[Kogasa] %i rapes have been credited to your account!", score1 * amount);
+		PrintToChat(sender, "[SM] %i rapes have been credited to your account!", score1 * amount);
 
 	g_iRapesReceived[recipient] += score2 * amount;
-	PrintToChat(recipient, "[Kogasa] you just received %i rapes!", score2 * amount);
+	PrintToChat(recipient, "[SM] you just received %i rapes!", score2 * amount);
 		
 	UpdateLastRapists(recipient, sender);
 	SaveClientStats(sender);
@@ -1372,6 +1523,33 @@ void BuildHuggerHistoryString(int client, char[] buffer, int maxlen)
 	}
 }
 
+void BuildFeederHistoryString(int client, char[] buffer, int maxlen)
+{
+	buffer[0] = '\0';
+	bool appended = false;
+
+	for (int i = 0; i < MAX_HISTORY_ENTRIES; i++)
+	{
+		if (!g_szLastFeeders[client][i][0])
+		{
+			continue;
+		}
+
+		if (appended)
+		{
+			StrCat(buffer, maxlen, ", ");
+		}
+
+		StrCat(buffer, maxlen, g_szLastFeeders[client][i]);
+		appended = true;
+	}
+
+	if (!appended)
+	{
+		strcopy(buffer, maxlen, "None");
+	}
+}
+
 void BuildRapistHistoryString(int client, char[] buffer, int maxlen)
 {
 	if (g_szLastRapists[client][0])
@@ -1392,6 +1570,17 @@ void UpdateLastHuggers(int recipient, const char[] huggerName)
 	}
 
 	strcopy(g_szLastHuggers[recipient][0], MAX_NAME_LENGTH, huggerName);
+	SaveClientStats(recipient);
+}
+
+void UpdateLastFeeders(int recipient, const char[] feederName)
+{
+	for (int i = MAX_HISTORY_ENTRIES - 1; i > 0; i--)
+	{
+		strcopy(g_szLastFeeders[recipient][i], MAX_NAME_LENGTH, g_szLastFeeders[recipient][i - 1]);
+	}
+
+	strcopy(g_szLastFeeders[recipient][0], MAX_NAME_LENGTH, feederName);
 	SaveClientStats(recipient);
 }
 
@@ -1473,11 +1662,14 @@ void ResetClientStats(int client)
 	CancelStatsRetryTimer(client);
 	g_iHugsReceived[client] = 0;
 	g_iHugsGiven[client] = 0;
+	g_iFeedsReceived[client] = 0;
+	g_iFeedsGiven[client] = 0;
 	g_iRapesReceived[client] = 0;
 	g_iRapesGiven[client] = 0;
 	for (int i = 0; i < MAX_HISTORY_ENTRIES; i++)
 	{
 		g_szLastHuggers[client][i][0] = '\0';
+		g_szLastFeeders[client][i][0] = '\0';
 	}
 	g_szLastRapists[client][0] = '\0';
 	g_szClientSteamId[client][0] = '\0';
@@ -1499,7 +1691,7 @@ void ResetClientStats(int client)
 
 		if (notify)
 		{
-			PrintToChat(client, "[Kogasa] Your hug/rape stats are still loading. Please wait.");
+			PrintToChat(client, "[SM] Your hug/rape stats are still loading. Please wait.");
 		}
 
 		AttemptLoadClientStats(client);
@@ -1563,8 +1755,8 @@ void ResetClientStats(int client)
 		char steamEsc[96];
 		SQL_EscapeString(g_hDatabase, g_szClientSteamId[client], steamEsc, sizeof(steamEsc));
 
-	char query[512];
-	Format(query, sizeof(query), "SELECT hugs_given, hugs_received, rapes_given, rapes_received, last_hugger1, last_hugger2, last_hugger3, last_hugger4, last_hugger5, last_rapists FROM %s WHERE steamid = '%s'", HUGS_DB_TABLE, steamEsc);
+	char query[768];
+	Format(query, sizeof(query), "SELECT hugs_given, hugs_received, feeds_given, feeds_received, rapes_given, rapes_received, last_hugger1, last_hugger2, last_hugger3, last_hugger4, last_hugger5, last_feeder1, last_feeder2, last_feeder3, last_feeder4, last_feeder5, last_rapists FROM %s WHERE steamid = '%s'", HUGS_DB_TABLE, steamEsc);
 
 		g_bStatsPending[client] = true;
 		SQL_TQuery(g_hDatabase, SQL_OnStatsLoaded, query, GetClientUserId(client));
@@ -1594,6 +1786,8 @@ void ResetClientStats(int client)
 
 	int hugsGiven = 0;
 	int hugsReceived = 0;
+	int feedsGiven = 0;
+	int feedsReceived = 0;
 	int rapesGiven = 0;
 	int rapesReceived = 0;
 	char lastRapists[HISTORY_STRING_LEN];
@@ -1604,24 +1798,30 @@ void ResetClientStats(int client)
 	{
 		hugsGiven = results.FetchInt(0);
 		hugsReceived = results.FetchInt(1);
-		rapesGiven = results.FetchInt(2);
-		rapesReceived = results.FetchInt(3);
+		feedsGiven = results.FetchInt(2);
+		feedsReceived = results.FetchInt(3);
+		rapesGiven = results.FetchInt(4);
+		rapesReceived = results.FetchInt(5);
 		for (int i = 0; i < MAX_HISTORY_ENTRIES; i++)
 		{
-			results.FetchString(4 + i, g_szLastHuggers[client][i], MAX_NAME_LENGTH);
+			results.FetchString(6 + i, g_szLastHuggers[client][i], MAX_NAME_LENGTH);
+			results.FetchString(11 + i, g_szLastFeeders[client][i], MAX_NAME_LENGTH);
 		}
-		results.FetchString(9, lastRapists, sizeof(lastRapists));
+		results.FetchString(16, lastRapists, sizeof(lastRapists));
 	}
 	else
 	{
 		for (int i = 0; i < MAX_HISTORY_ENTRIES; i++)
 		{
 			g_szLastHuggers[client][i][0] = '\0';
+			g_szLastFeeders[client][i][0] = '\0';
 		}
 	}
 
 	g_iHugsGiven[client] = hugsGiven;
 	g_iHugsReceived[client] = hugsReceived;
+	g_iFeedsGiven[client] = feedsGiven;
+	g_iFeedsReceived[client] = feedsReceived;
 	g_iRapesGiven[client] = rapesGiven;
 	g_iRapesReceived[client] = rapesReceived;
 	strcopy(g_szLastRapists[client], HISTORY_STRING_LEN, lastRapists);
@@ -1661,16 +1861,19 @@ void ResetClientStats(int client)
 
 	char rapistsEsc[HISTORY_STRING_LEN * 2 + 1];
 	char huggerEscaped[MAX_HISTORY_ENTRIES][MAX_NAME_LENGTH * 2 + 1];
+	char feederEscaped[MAX_HISTORY_ENTRIES][MAX_NAME_LENGTH * 2 + 1];
 	for (int i = 0; i < MAX_HISTORY_ENTRIES; i++)
 	{
 		SQL_EscapeString(g_hDatabase, g_szLastHuggers[client][i], huggerEscaped[i], sizeof(huggerEscaped[]));
+		SQL_EscapeString(g_hDatabase, g_szLastFeeders[client][i], feederEscaped[i], sizeof(feederEscaped[]));
 	}
 	SQL_EscapeString(g_hDatabase, g_szLastRapists[client], rapistsEsc, sizeof(rapistsEsc));
 
-    char query[2048];
-    Format(query, sizeof(query), "REPLACE INTO %s (steamid, name, hugs_given, hugs_received, rapes_given, rapes_received, last_hugger1, last_hugger2, last_hugger3, last_hugger4, last_hugger5, last_rapists) VALUES ('%s', '%s', %d, %d, %d, %d, '%s', '%s', '%s', '%s', '%s', '%s')",
-        HUGS_DB_TABLE, steamEsc, nameEsc, g_iHugsGiven[client], g_iHugsReceived[client], g_iRapesGiven[client], g_iRapesReceived[client],
-        huggerEscaped[0], huggerEscaped[1], huggerEscaped[2], huggerEscaped[3], huggerEscaped[4], rapistsEsc);
+    char query[3072];
+    Format(query, sizeof(query), "REPLACE INTO %s (steamid, name, hugs_given, hugs_received, feeds_given, feeds_received, rapes_given, rapes_received, last_hugger1, last_hugger2, last_hugger3, last_hugger4, last_hugger5, last_feeder1, last_feeder2, last_feeder3, last_feeder4, last_feeder5, last_rapists) VALUES ('%s', '%s', %d, %d, %d, %d, %d, %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')",
+        HUGS_DB_TABLE, steamEsc, nameEsc, g_iHugsGiven[client], g_iHugsReceived[client], g_iFeedsGiven[client], g_iFeedsReceived[client], g_iRapesGiven[client], g_iRapesReceived[client],
+        huggerEscaped[0], huggerEscaped[1], huggerEscaped[2], huggerEscaped[3], huggerEscaped[4],
+        feederEscaped[0], feederEscaped[1], feederEscaped[2], feederEscaped[3], feederEscaped[4], rapistsEsc);
 
 		SQL_TQuery(g_hDatabase, SQL_OnStatsSaved, query);
 	}
@@ -1747,13 +1950,21 @@ void ResetClientStats(int client)
 		g_iSchemaOpsPending = 0;
 
 		char query[2048];
-		Format(query, sizeof(query), "CREATE TABLE IF NOT EXISTS %s (steamid VARCHAR(64) PRIMARY KEY, name VARCHAR(%d) NOT NULL DEFAULT '', hugs_given INTEGER NOT NULL DEFAULT 0, hugs_received INTEGER NOT NULL DEFAULT 0, rapes_given INTEGER NOT NULL DEFAULT 0, rapes_received INTEGER NOT NULL DEFAULT 0, last_hugger1 VARCHAR(%d) NOT NULL DEFAULT '', last_hugger2 VARCHAR(%d) NOT NULL DEFAULT '', last_hugger3 VARCHAR(%d) NOT NULL DEFAULT '', last_hugger4 VARCHAR(%d) NOT NULL DEFAULT '', last_hugger5 VARCHAR(%d) NOT NULL DEFAULT '', last_rapists VARCHAR(%d) NOT NULL DEFAULT '')",
-			HUGS_DB_TABLE, MAX_NAME_LENGTH, MAX_NAME_LENGTH, MAX_NAME_LENGTH, MAX_NAME_LENGTH, MAX_NAME_LENGTH, MAX_NAME_LENGTH, HISTORY_STRING_LEN);
+		Format(query, sizeof(query), "CREATE TABLE IF NOT EXISTS %s (steamid VARCHAR(64) PRIMARY KEY, name VARCHAR(%d) NOT NULL DEFAULT '', hugs_given INTEGER NOT NULL DEFAULT 0, hugs_received INTEGER NOT NULL DEFAULT 0, feeds_given INTEGER NOT NULL DEFAULT 0, feeds_received INTEGER NOT NULL DEFAULT 0, rapes_given INTEGER NOT NULL DEFAULT 0, rapes_received INTEGER NOT NULL DEFAULT 0, last_hugger1 VARCHAR(%d) NOT NULL DEFAULT '', last_hugger2 VARCHAR(%d) NOT NULL DEFAULT '', last_hugger3 VARCHAR(%d) NOT NULL DEFAULT '', last_hugger4 VARCHAR(%d) NOT NULL DEFAULT '', last_hugger5 VARCHAR(%d) NOT NULL DEFAULT '', last_feeder1 VARCHAR(%d) NOT NULL DEFAULT '', last_feeder2 VARCHAR(%d) NOT NULL DEFAULT '', last_feeder3 VARCHAR(%d) NOT NULL DEFAULT '', last_feeder4 VARCHAR(%d) NOT NULL DEFAULT '', last_feeder5 VARCHAR(%d) NOT NULL DEFAULT '', last_rapists VARCHAR(%d) NOT NULL DEFAULT '')",
+			HUGS_DB_TABLE, MAX_NAME_LENGTH, MAX_NAME_LENGTH, MAX_NAME_LENGTH, MAX_NAME_LENGTH, MAX_NAME_LENGTH, MAX_NAME_LENGTH, MAX_NAME_LENGTH, MAX_NAME_LENGTH, MAX_NAME_LENGTH, MAX_NAME_LENGTH, MAX_NAME_LENGTH, HISTORY_STRING_LEN);
 		g_iSchemaOpsPending++;
 		SQL_TQuery(g_hDatabase, SQL_OnSchemaOpComplete, query);
 
 		// Add name column if it doesn't exist (for existing tables)
 		Format(query, sizeof(query), "ALTER TABLE %s ADD COLUMN IF NOT EXISTS name VARCHAR(%d) NOT NULL DEFAULT ''", HUGS_DB_TABLE, MAX_NAME_LENGTH);
+		g_iSchemaOpsPending++;
+		SQL_TQuery(g_hDatabase, SQL_OnSchemaOpComplete, query);
+
+		Format(query, sizeof(query), "ALTER TABLE %s ADD COLUMN IF NOT EXISTS feeds_given INTEGER NOT NULL DEFAULT 0", HUGS_DB_TABLE);
+		g_iSchemaOpsPending++;
+		SQL_TQuery(g_hDatabase, SQL_OnSchemaOpComplete, query);
+
+		Format(query, sizeof(query), "ALTER TABLE %s ADD COLUMN IF NOT EXISTS feeds_received INTEGER NOT NULL DEFAULT 0", HUGS_DB_TABLE);
 		g_iSchemaOpsPending++;
 		SQL_TQuery(g_hDatabase, SQL_OnSchemaOpComplete, query);
 
@@ -1770,9 +1981,22 @@ void ResetClientStats(int client)
 			"last_hugger5"
 		};
 
+		static const char g_LastFeederColumns[MAX_HISTORY_ENTRIES][16] =
+		{
+			"last_feeder1",
+			"last_feeder2",
+			"last_feeder3",
+			"last_feeder4",
+			"last_feeder5"
+		};
+
 		for (int i = 0; i < MAX_HISTORY_ENTRIES; i++)
 		{
 			Format(query, sizeof(query), "ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s VARCHAR(%d) NOT NULL DEFAULT ''", HUGS_DB_TABLE, g_LastHuggerColumns[i], MAX_NAME_LENGTH);
+			g_iSchemaOpsPending++;
+			SQL_TQuery(g_hDatabase, SQL_OnSchemaOpComplete, query);
+
+			Format(query, sizeof(query), "ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s VARCHAR(%d) NOT NULL DEFAULT ''", HUGS_DB_TABLE, g_LastFeederColumns[i], MAX_NAME_LENGTH);
 			g_iSchemaOpsPending++;
 			SQL_TQuery(g_hDatabase, SQL_OnSchemaOpComplete, query);
 		}

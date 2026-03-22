@@ -17,7 +17,6 @@
 #define FILTERS_OUTBOX_CLEANUP_INTERVAL 120
 #define FILTERS_OUTBOX_RETENTION_SECONDS 3600
 #define FILTERS_CHAT_RETENTION_SECONDS 86400
-#define FILTERS_IGNORED_STEAMID64 "76561199812613650" // [U:1:1852347922]
 #define REDLIST_RAPES_THRESHOLD 1
 #define PRENAME_MAX_PATTERN 64
 #define PRENAME_MAX_RENAME 64
@@ -233,17 +232,6 @@ static void Filters_UpdateExternalStats(int client)
         g_PlayerState[client].whaleStatsLoaded = false;
     }
 
-}
-
-static bool Filters_IsIgnoredClient(int client)
-{
-    char steamId[32];
-    if (GetClientAuthId(client, AuthId_SteamID64, steamId, sizeof(steamId)))
-    {
-        return StrEqual(steamId, FILTERS_IGNORED_STEAMID64, false);
-    }
-
-    return false;
 }
 
 static void RefreshHostAddress()
@@ -950,8 +938,6 @@ static void Filters_RelayChatToServers(int client, const char[] message)
 void Filters_LogChatMessage(int client, const char[] message)
 {
     if (GetConVarInt(g_hChatFrontend) < 1)
-        return;
-    if (Filters_IsIgnoredClient(client))
         return;
     if (!g_bDbReady)
     {
