@@ -161,7 +161,12 @@ public void OnPluginStart() {
 			if (IsClientInGame(i))
 			{
 				ResetClientArrays(i);
+				// Ensure all damage/trace hooks are installed for clients that are already in-game
+				SDKHook(i, SDKHook_OnTakeDamage, OnTakeDamage);
+				SDKHook(i, SDKHook_WeaponSwitch, OnWeaponSwitch);
+				SDKHook(i, SDKHook_TraceAttack, OnTraceAttack);
 				SDKHook(i, SDKHook_OnTakeDamagePost, Accuracy_OnTakeDamagePost);
+				SDKHook(i, SDKHook_OnTakeDamageAlive, OnTakeDamageAlive);
 			}
 		}
 
@@ -1125,6 +1130,7 @@ public Action OnTakeDamage(client, &attacker, &inflictor, &Float:damage, &damage
 		EmitAmbientSound(SOUND_NEON_SIGN, damagePosition, client, SNDLEVEL_NORMAL);
 		return Plugin_Changed;
 	}
+		
 	return Plugin_Continue;
 }
 
@@ -1135,6 +1141,15 @@ public Action OnTraceAttack(victim, &attacker, &inflictor, &Float:damage, &damag
 	{
 		return Plugin_Continue;
 	}
+
+    if (hitgroup == 1)
+	{ // Swap these two possibly
+		if (CheckDesertEagle(attacker) == 2)
+		{
+			damagetype |= DMG_CRIT;
+			return Plugin_Changed;
+		}
+    }
 
 	if (GetClientTeam(victim) == GetClientTeam(attacker)) {
 		if (CheckShock(attacker) == 2)
@@ -1152,10 +1167,6 @@ public Action OnTraceAttack(victim, &attacker, &inflictor, &Float:damage, &damag
 				SetEntPropFloat(medigun, Prop_Send, "m_flChargeLevel", uber);
 			}
 		}
-	} else if (CheckDesertEagle(attacker) == 2)
-	{
-		damagetype |= DMG_USE_HITLOCATIONS;
-		return Plugin_Changed;
 	}
 
 	return Plugin_Continue;
