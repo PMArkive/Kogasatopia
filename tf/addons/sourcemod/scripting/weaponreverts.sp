@@ -800,9 +800,9 @@ public Action Timer_HealTimer(Handle timer)
     {
         if (!IsClientInGame(client)) continue;
 
-        // Heal delivery should not re-check scythe — that was already validated on damage
         if (tf2_players[client].healCount > 0 && IsPlayerAlive(client) &&
-            GetClientHealth(client) < TF2_GetPlayerMaxHealth(client))
+            GetClientHealth(client) < TF2_GetPlayerMaxHealth(client) &&
+				CheckScythe(client) == 2)
         {
             tf2_players[client].healCount--;
             AddPlayerHealth(client, tf2_players[client].lastAfterburnDamage, 1.0, false, true);
