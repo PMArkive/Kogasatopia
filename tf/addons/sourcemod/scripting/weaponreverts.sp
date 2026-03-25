@@ -794,37 +794,33 @@ public Action TF2_CalcIsAttackCritical(client, weapon, String:weaponname[], &boo
 	return Plugin_Changed;
 }
 
-// Attribute timer
 public Action Timer_HealTimer(Handle timer)
 {
-	for (int client = 1; client <= MaxClients; client++)
-	{
-		if (!IsClientInGame(client))
-		{
-			continue;
-		}
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        if (!IsClientInGame(client)) continue;
 
-		// Handle afterburn heal
-		if (tf2_players[client].healCount > 0 && IsPlayerAlive(client) &&
-			GetClientHealth(client) < TF2_GetPlayerMaxHealth(client) &&
-			CheckScythe(client) == 2)
-		{
-			tf2_players[client].healCount--;
-			AddPlayerHealth(client, tf2_players[client].lastAfterburnDamage, 1.0, false, true);
-			EmitSoundToClient(client, SOUND_DISPENSER_METAL);
-		}
-		// Handle shock charge refill
-		else if (tf2_players[client].shockCharge < 30)
-		{
-			tf2_players[client].shockCharge++;
-			if (tf2_players[client].shockCharge % 2 == 0 || tf2_players[client].shockCharge == 1)
-			{
-				PrintHintText(client, "Shock Charge: %i%%%", (tf2_players[client].shockCharge * 100 / 30));
-			}
-		}
-	}
-	return Plugin_Continue;
-} 
+        // Heal delivery should not re-check scythe — that was already validated on damage
+        if (tf2_players[client].healCount > 0 && IsPlayerAlive(client) &&
+            GetClientHealth(client) < TF2_GetPlayerMaxHealth(client))
+        {
+            tf2_players[client].healCount--;
+            AddPlayerHealth(client, tf2_players[client].lastAfterburnDamage, 1.0, false, true);
+            EmitSoundToClient(client, SOUND_DISPENSER_METAL);
+        }
+
+        // Shock charge refill runs independently
+        if (tf2_players[client].shockCharge < 30)
+        {
+            tf2_players[client].shockCharge++;
+            if (tf2_players[client].shockCharge % 2 == 0 || tf2_players[client].shockCharge == 1)
+            {
+                PrintHintText(client, "Shock Charge: %i%%%", (tf2_players[client].shockCharge * 100 / 30));
+            }
+        }
+    }
+    return Plugin_Continue;
+}
 
 // Damage distance multiplier attribute, now unused since we're giving Pom/Bison a larger hitbox
 /*float GetDistanceMultiplier(float posVic[3], float posAtt[3])
@@ -841,55 +837,35 @@ public Action Timer_HealTimer(Handle timer)
 	return calculated;
 }*/
 
-// Holster reload code, hard coded for clip size 40 and 2, can be rewritten as an attribute in the future
 public Action OnWeaponSwitch(client, weapon)
 {
 	if (!GetConVarInt(g_sEnabled))
 	{
 		return Plugin_Continue;
 	}
-	// only do anything if the player is a medic or pyro
-	TFClassType playerClass = TF2_GetPlayerClass(client);
-	if (playerClass == TFClassType:TFClass_Medic)
+
+	if (weapon == -1)
 	{
-		char classname[64];
-		GetEntityClassname(weapon, classname, sizeof(classname));
-		if (StrEqual(classname, "tf_weapon_syringegun_medic", false))
+		return Plugin_Continue;
+	}
+
+	int maxClip = TF2CustAttr_GetInt(weapon, "holster reload");
+	if (maxClip != 0)
+	{
+		int clip = GetClip(weapon);
+		int reserve = GetAmmo_Weapon(weapon);
+		int missing = maxClip - clip;
+		int toReload = (missing < reserve) ? missing : reserve;
+		if (toReload > 0)
 		{
-			int clip = GetClip(weapon);
-			int reserve = GetAmmo_Weapon(weapon);
-			int missing = 40 - clip;
-
-			int toReload = (missing < reserve) ? missing : reserve;
-
-			if (toReload > 0)
-			{
-				SetClip_Weapon(weapon, clip + toReload);
-				SetAmmo_Weapon(weapon, reserve - toReload);
-				return Plugin_Changed;
-			}
+			SetClip_Weapon(weapon, clip + toReload);
+			SetAmmo_Weapon(weapon, reserve - toReload);
+			return Plugin_Changed;
 		}
 	}
-	else if (playerClass == TFClassType:TFClass_Pyro)
-	{
-		if ((weapon != -1) && (TF2CustAttr_GetInt(weapon, "twin barrel attributes") != 0))
-		{
-			int clip = GetClip(weapon);
-			int reserve = GetAmmo_Weapon(weapon);
-			int missing = 2 - clip;
 
-			int toReload = (missing < reserve) ? missing : reserve;
-			if (toReload > 0)
-			{
-				SetClip_Weapon(weapon, clip + toReload);
-				SetAmmo_Weapon(weapon, reserve - toReload);
-				return Plugin_Changed;
-			}
-		}
-	}
 	return Plugin_Continue;
 }
-
 
 static void SecondaryDamageRefill_OnDamage(int attacker, int weapon, float damage)
 {
@@ -1057,7 +1033,7 @@ public Action OnTakeDamage(client, &attacker, &inflictor, &Float:damage, &damage
 		damagetype |= DMG_SONIC;
 		return Plugin_Changed;
 	}
-	int watch = GetPlayerWeaponSlot(client, 4);
+
 	if (wepindex == 307) { //Ullapool Caber weapon index
 		if (client == attacker) {
 			damage = 50.0;
@@ -1082,53 +1058,55 @@ public Action OnTakeDamage(client, &attacker, &inflictor, &Float:damage, &damage
 			damagetype|=DMG_CRIT;
 			return Plugin_Changed;
 		}
-	} else if ((watch != -1) && (TF2CustAttr_GetInt(watch, "escampette attributes") != 0)) { // TF2C Custom Attribute for Spy
-		if (TF2_IsPlayerInCondition(client, TFCond_Cloaked)) { // if cloaked
-			float flCloakMeter = GetEntPropFloat(client, Prop_Send, "m_flCloakMeter");
-			flCloakMeter -= 10;
-			SetEntPropFloat(client, Prop_Send, "m_flCloakMeter", flCloakMeter);
-			EmitAmbientSound(SOUND_POMSON_DRAIN, damagePosition, client, SNDLEVEL_NORMAL);
-			return Plugin_Changed;
-		}
-	} else if (CheckIfAfterburn(damagecustom)) {
-		tf2_players[attacker].scytheWeapon = CheckScythe(attacker);
-		if (tf2_players[attacker].scytheWeapon != 0) {
+	} else {
+		// Moved watch lookup here so it's only called when actually needed
+		int watch = GetPlayerWeaponSlot(client, 4);
+		if ((watch != -1) && (TF2CustAttr_GetInt(watch, "escampette attributes") != 0)) { // TF2C Custom Attribute for Spy
+			if (TF2_IsPlayerInCondition(client, TFCond_Cloaked)) { // if cloaked
+				float flCloakMeter = GetEntPropFloat(client, Prop_Send, "m_flCloakMeter");
+				flCloakMeter -= 10;
+				SetEntPropFloat(client, Prop_Send, "m_flCloakMeter", flCloakMeter);
+				EmitAmbientSound(SOUND_POMSON_DRAIN, damagePosition, client, SNDLEVEL_NORMAL);
+				return Plugin_Changed;
+			}
+		} else if (CheckIfAfterburn(damagecustom)) {
+			if (!IsPlayerAlive(attacker)) return Plugin_Continue;
+			tf2_players[attacker].scytheWeapon = CheckScythe(attacker);
+			if (tf2_players[attacker].scytheWeapon != 0) {
 				int heal = RoundToNearest(damage) * 2;
-			tf2_players[attacker].lastAfterburnDamage = heal;
-				if (!IsPlayerAlive(attacker)) {
-					TF2_RemoveCondition(client, TFCond_OnFire);
-					EmitAmbientSound(SOUND_FLAME_OUT, damagePosition, client, SNDLEVEL_NORMAL, SND_NOFLAGS, 0.2, SNDPITCH_NORMAL);
-					return Plugin_Changed;
-			} else if (tf2_players[attacker].scytheWeapon == 2) {
+				tf2_players[attacker].lastAfterburnDamage = heal;
+				if (tf2_players[attacker].scytheWeapon == 2) {
 					AddPlayerHealth(attacker, heal, 1.0, false, true);
 					return Plugin_Changed;
+				} else {
+					// Queue the heal for the timer instead of extinguishing
+					tf2_players[attacker].healCount++;
+					return Plugin_Changed;
+				}
 			}
+		} else if ((weapon != -1) && (TF2CustAttr_GetInt(weapon, "twin barrel attributes") != 0)) {
+			float vecAngles[3];
+			float vecVelocity[3];
+
+			GetClientEyeAngles(attacker, vecAngles);
+			GetEntPropVector(client, Prop_Data, "m_vecVelocity", vecVelocity);
+
+			vecAngles[0] = DegToRad(-1.0 * vecAngles[0]);
+			vecAngles[1] = DegToRad(vecAngles[1]);
+
+			if (damage >= 40.0) vecVelocity[2] = 251.0;
+
+			TeleportEntity(client, NULL_VECTOR, NULL_VECTOR, vecVelocity);
+			return Plugin_Changed;
+		} else if ((weapon != -1) && (TF2CustAttr_GetInt(weapon, "shock therapy attributes") != 0)) {
+			damage = float(tf2_players[attacker].shockCharge * 100 / 30);
+			tf2_players[attacker].shockCharge = 0;
+			EmitAmbientSound(SOUND_NEON_SIGN, damagePosition, client, SNDLEVEL_NORMAL);
+			return Plugin_Changed;
+		} else if ((weapon != -1) && (TF2CustAttr_GetInt(weapon, "hitscan ignite targets") != 0)) {
+			TF2_IgnitePlayer(client, attacker, 2.0);
+			return Plugin_Changed;
 		}
-	} else if ((weapon != -1) && (TF2CustAttr_GetInt(weapon, "twin barrel attributes") != 0)) {
-		// This code is to launch targets, velocity needs to be >250 for any effect to occur
-		// Hopefully a better way to lift a target with damage can be located in the future, this feels fine for now
-		float vecAngles[3];
-		float vecVelocity[3];
-
-		// Get the attacker's aim direction
-		GetClientEyeAngles(attacker, vecAngles);
-
-		// Get the client's (target's) current velocity
-		GetEntPropVector(client, Prop_Data, "m_vecVelocity", vecVelocity);
-
-		// Convert angles to radians
-		vecAngles[0] = DegToRad(-1.0 * vecAngles[0]);
-		vecAngles[1] = DegToRad(vecAngles[1]);
-
-				if (damage >= 40.0) vecVelocity[2] = 251.0;
-
-		TeleportEntity(client, NULL_VECTOR, NULL_VECTOR, vecVelocity);
-		return Plugin_Changed;
-	} else if ((weapon != -1) && (TF2CustAttr_GetInt(weapon, "shock therapy attributes") != 0)) {
-		damage = float(tf2_players[attacker].shockCharge * 100 / 30);
-		tf2_players[attacker].shockCharge = 0;
-		EmitAmbientSound(SOUND_NEON_SIGN, damagePosition, client, SNDLEVEL_NORMAL);
-		return Plugin_Changed;
 	}
 		
 	return Plugin_Continue;
@@ -1610,6 +1588,7 @@ public TF2Items_OnGiveNamedItem_Post(client, String:classname[], index, level, q
 			case 17, 204, 36, 412: // Syringe guns
 			{
 				TF2Attrib_SetByName(entity, "add uber charge on hit", 0.0125); // 1.25% uber per projectile hit
+				TF2CustAttr_SetInt(entity, "holster reload", 40);
 			}
 			case 171: // The Tribalman's Shiv
 			{
