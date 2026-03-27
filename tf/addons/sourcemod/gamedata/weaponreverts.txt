@@ -38,7 +38,7 @@
 
 		"Offsets"
 		{
-			"CTFWeaponBase::CanFireCriticalShot()"
+			"CTFWeaponBase::CanFireCriticalShot"
 			{
 				"windows"	"439"
 				"linux"		"446"
@@ -151,6 +151,24 @@
 					"pPlayer"
 					{
 						"type"	"cbaseentity"
+					}
+				}
+			}
+			"CTFWeaponBase::CanFireCriticalShot"
+			{
+				"offset"    "CTFWeaponBase::CanFireCriticalShot"
+				"hooktype"  "entity"
+				"this"      "entity"
+				"return"    "bool"
+				"arguments"
+				{
+					"bIsRapidFire"
+					{
+						"type"  "bool"
+					}
+					"pTarget"
+					{
+						"type"  "cbaseentity"
 					}
 				}
 			}
