@@ -98,6 +98,7 @@ float g_flWranglerCustomShieldValue = 0.75;
 DynamicDetour dhook_CTFPlayer_CalculateMaxSpeed;
 DynamicDetour dhook_CTFLunchBox_ApplyBiteEffects;
 DynamicHook dhook_CObjectCartDispenser_DispenseMetal;
+DynamicHook dhook_CTFWeaponBase_CanFireCriticalShot;
 
 public Plugin myinfo =
 {
@@ -202,10 +203,12 @@ public void OnPluginStart() {
 		dhook_CTFPlayer_CalculateMaxSpeed = DynamicDetour.FromConf(conf, "CTFPlayer::TeamFortress_CalculateMaxSpeed");
 		dhook_CTFLunchBox_ApplyBiteEffects = DynamicDetour.FromConf(conf, "CTFLunchBox::ApplyBiteEffects");
 		dhook_CObjectCartDispenser_DispenseMetal = DynamicHook.FromConf(conf, "CObjectCartDispenser::DispenseMetal");
+		dhook_CTFWeaponBase_CanFireCriticalShot = DynamicHook.FromConf(conf, "CTFWeaponBase::CanFireCriticalShot");
 
 		if (dhook_CTFPlayer_CalculateMaxSpeed == null) SetFailState("Failed to create dhook_CTFPlayer_CalculateMaxSpeed");
 		if (dhook_CTFLunchBox_ApplyBiteEffects == null) SetFailState("Failed to create dhook_CTFLunchBox_ApplyBiteEffects");
 		if (dhook_CObjectCartDispenser_DispenseMetal == null) SetFailState("Failed to create dhook_CObjectCartDispenser_DispenseMetal");
+		if (dhook_CTFWeaponBase_CanFireCriticalShot == null) SetFailState("Failed to create dhook_CTFWeaponBase_CanFireCriticalShot");
 
 		dhook_CTFPlayer_CalculateMaxSpeed.Enable(Hook_Post, CalculateMaxSpeed);
 		dhook_CTFLunchBox_ApplyBiteEffects.Enable(Hook_Pre, ApplyBiteEffects_Pre);
@@ -304,6 +307,11 @@ public void OnEntityCreated(int entity, const char[] class) {
 		if (StrEqual(class, "mapobj_cart_dispenser"))
 		{
 			dhook_CObjectCartDispenser_DispenseMetal.HookEntity(Hook_Pre, entity, CartDispenseMetal);
+		}
+
+		if (StrEqual(class, "tf_weapon_pistol"))
+		{
+			dhook_CTFWeaponBase_CanFireCriticalShot.HookEntity(Hook_Post, entity, CanFireCriticalShot_Post);
 		}
 	}
 }
@@ -519,10 +527,6 @@ public void Accuracy_OnTakeDamagePost(int victim, int attacker, int inflictor, f
 	if (dist > ACC_MAX_DIST) return;
 
 	bool accurate = Accuracy_IsAccurateHit(damage, dist);
-	int remainingHealth = IsPlayerAlive(victim) ? GetClientHealth(victim) : 0;
-	/*if (remainingHealth > 0 && remainingHealth <= RoundToCeil(damage))
-		remainingHealth = 0; // treat as lethal if the incoming damage equals remaining HP
-	bool lethal = (remainingHealth <= 0);*/
 
 	if (accurate)
 	{
@@ -1114,31 +1118,45 @@ public Action OnTakeDamage(client, &attacker, &inflictor, &Float:damage, &damage
 
 public Action OnTraceAttack(victim, &attacker, &inflictor, &Float:damage, &damagetype, &ammotype, hitbox, hitgroup)
 {
-	// We use this function to check if you've hit an ally with the TF2C Shock Therapy
-	if (!IsPlayerAlive(attacker) || !IsValidClient(attacker) || !IsValidEdict(attacker))
+    if (attacker <= 0 || !IsValidEdict(attacker) || !IsValidClient(attacker) || !IsPlayerAlive(attacker))
+        return Plugin_Continue;
+
+	if (damagetype & DMG_BULLET)
 	{
-		return Plugin_Continue;
+		int weapon = GetEntPropEnt(attacker, Prop_Send, "m_hActiveWeapon");
+		if (IsValidEntity(weapon) && TF2CustAttr_GetInt(weapon, "headshots enabled", 0))
+		{
+			damagetype |= DMG_USE_HITLOCATIONS;
+			return Plugin_Changed;
+		}
 	}
 
-	if (GetClientTeam(victim) != GetClientTeam(attacker))
+    if (GetClientTeam(victim) != GetClientTeam(attacker))
+        return Plugin_Continue;
+
+    if (CheckShock(attacker) != 2)
+        return Plugin_Continue;
+
+    int buff = OverhealStruct(victim);
+    int health = GetClientHealth(victim);
+    if (health >= buff)
+        return Plugin_Continue;
+
+    int medigun = GetPlayerWeaponSlot(attacker, 1);
+    if (!IsValidEntity(medigun))
+        return Plugin_Continue;
+
+    float pos[3];
+    GetClientAbsOrigin(victim, pos);  // was GetClientAbsAngles — wrong data
+    TF2_SetHealth(victim, buff);
+    tf2_players[attacker].shockCharge = 0;
+    EmitAmbientSound(SOUND_ARROW_HEAL, pos, victim, SNDLEVEL_NORMAL);
+
+    float uber = (float(buff - health) / 5000.0) + GetEntPropFloat(medigun, Prop_Send, "m_flChargeLevel");
+    SetEntPropFloat(medigun, Prop_Send, "m_flChargeLevel", uber);
+
     return Plugin_Continue;
-
-	if (CheckShock(attacker) != 2)
-		return Plugin_Continue;
-
-	int buff = OverhealStruct(victim);
-	int health = GetClientHealth(victim);
-	if (health < buff) {
-		int medigun = GetPlayerWeaponSlot(attacker, 1);
-		float pos[3];
-		GetClientAbsAngles(victim, pos);
-		TF2_SetHealth(victim, buff);
-		tf2_players[attacker].shockCharge = 0;
-		EmitAmbientSound(SOUND_ARROW_HEAL, pos, victim, SNDLEVEL_NORMAL);
-		float uber = (float((buff - health) / 5000) + (GetEntPropFloat(medigun, Prop_Send, "m_flChargeLevel")));
-		SetEntPropFloat(medigun, Prop_Send, "m_flChargeLevel", uber);
-	}
-} 
+}
 
 public Action OnPlayerRunCmd(
 	int client, int& buttons, int& impulse, float vel[3], float angles[3],
@@ -1330,6 +1348,20 @@ MRESReturn CartDispenseMetal(int entity, DHookReturn returnValue, DHookParam par
 		}
 	}
 	return MRES_Ignored;
+}
+
+public MRESReturn CanFireCriticalShot_Post(int weapon, DHookReturn hReturn, DHookParam parameters)
+{
+    int client = GetEntPropEnt(weapon, Prop_Send, "m_hOwnerEntity");
+    if (client <= 0 || client > MaxClients)
+        return MRES_Ignored;
+
+    // Check the firing weapon directly, not assumed secondary slot
+    if (TF2CustAttr_GetInt(weapon, "headshots enabled", 0)) {
+        hReturn.Value = true;
+        return MRES_Override;
+    }
+    return MRES_Ignored;
 }
 
 // Gas passer buff is a candidate for removal, it's uninspired and could be more creative
