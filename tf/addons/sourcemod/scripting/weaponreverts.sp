@@ -104,7 +104,7 @@ public Plugin myinfo =
 	name = "WeaponReverts",
 	author = "Hombre",
 	description = "Weapon changes plugin for Kogasatopia, very specific, this includes custom attribute code such as recoil jumping",
-	version = "5.0",
+	version = "6.0",
 	url = "https://kogasa.tf"
 };
 
@@ -1115,41 +1115,29 @@ public Action OnTakeDamage(client, &attacker, &inflictor, &Float:damage, &damage
 public Action OnTraceAttack(victim, &attacker, &inflictor, &Float:damage, &damagetype, &ammotype, hitbox, hitgroup)
 {
 	// We use this function to check if you've hit an ally with the TF2C Shock Therapy
-	if (!IsValidEdict(attacker) || !IsValidClient(attacker) || !IsPlayerAlive(attacker) || attacker <= 0)
+	if (!IsPlayerAlive(attacker) || !IsValidClient(attacker) || !IsValidEdict(attacker))
 	{
 		return Plugin_Continue;
 	}
 
-	/*if (CheckDesertEagle(attacker) == 2)
-	{
-		if (hitgroup == 1)
-		{
-			damagetype |= DMG_CRIT;
-			return Plugin_Changed;
-		}
-		return Plugin_Continue;
-    }*/
+	if (GetClientTeam(victim) != GetClientTeam(attacker))
+    return Plugin_Continue;
 
-	if (GetClientTeam(victim) == GetClientTeam(attacker)) {
-		if (CheckShock(attacker) == 2)
-		{	
-			int buff = OverhealStruct(victim);
-			int health = GetClientHealth(victim);
-			if (health < buff) {
-				int medigun = GetPlayerWeaponSlot(attacker, 1);
-				float pos[3];
-				GetClientAbsAngles(victim, pos);
-				TF2_SetHealth(victim, buff);
-				tf2_players[attacker].shockCharge = 0;
-				EmitAmbientSound(SOUND_ARROW_HEAL, pos, victim, SNDLEVEL_NORMAL);
-				float uber = (float((buff - health) / 5000) + (GetEntPropFloat(medigun, Prop_Send, "m_flChargeLevel")));
-				SetEntPropFloat(medigun, Prop_Send, "m_flChargeLevel", uber);
-			}
-			return Plugin_Continue;
-		}
+	if (CheckShock(attacker) != 2)
 		return Plugin_Continue;
+
+	int buff = OverhealStruct(victim);
+	int health = GetClientHealth(victim);
+	if (health < buff) {
+		int medigun = GetPlayerWeaponSlot(attacker, 1);
+		float pos[3];
+		GetClientAbsAngles(victim, pos);
+		TF2_SetHealth(victim, buff);
+		tf2_players[attacker].shockCharge = 0;
+		EmitAmbientSound(SOUND_ARROW_HEAL, pos, victim, SNDLEVEL_NORMAL);
+		float uber = (float((buff - health) / 5000) + (GetEntPropFloat(medigun, Prop_Send, "m_flChargeLevel")));
+		SetEntPropFloat(medigun, Prop_Send, "m_flChargeLevel", uber);
 	}
-	return Plugin_Continue;
 } 
 
 public Action OnPlayerRunCmd(
