@@ -143,14 +143,6 @@ public void OnPluginStart() {
 		g_iMetalOffset = FindSendPropInfo("CTFPlayer", "m_iAmmo");
 	// This is used to ignore clients without the m_iAmmo netprop
 
-		PrecacheSound(SOUND_ARROW_HEAL, true);
-		PrecacheSound(SOUND_NEON_SIGN, true);
-		PrecacheSound(ACC_EXPLODE_SOUND, true);
-		PrecacheSound(ACC_NOTIFY_SOUND, true);
-		PrecacheSound(ACC_NOTIFY_2, true);
-		PrecacheSound(BURP_SOUND, true);
-		PrecacheSound(ATTR_SECONDARY_REFILL_SOUND, true);
-
 		for (int i = 1; i <= MaxClients; i++)
 		{
 			tf2_players[i].sprokeTimer = null;
@@ -248,6 +240,14 @@ public void OnPluginStart() {
 }
 
 public void OnMapStart() {
+	PrecacheSound(SOUND_ARROW_HEAL, true);
+	PrecacheSound(SOUND_NEON_SIGN, true);
+	PrecacheSound(SOUND_FLAME_OUT, true);
+	PrecacheSound(ACC_EXPLODE_SOUND, true);
+	PrecacheSound(ACC_NOTIFY_SOUND, true);
+	PrecacheSound(ACC_NOTIFY_2, true);
+	PrecacheSound(BURP_SOUND, true);
+	PrecacheSound(ATTR_SECONDARY_REFILL_SOUND, true);
 	StartHealTimer();
 }
 
@@ -616,11 +616,12 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 	int userId = event.GetInt("userid");
 	int client = GetClientOfUserId(userId);
 
-	if (tf2_players[client].sprokeTimer != null)
-	{
-		Sproke_ClearEffect(client, false, true);
-		return Plugin_Changed;
-	}
+	Sproke_ClearEffect(client, false, true);
+	tf2_players[client].healCount = 0;
+	tf2_players[client].shockCharge = 30;
+
+	if (GetEntProp(GetPlayerWeaponSlot(client, 2), Prop_Send, "m_iItemDefinitionIndex") == 173)
+		tf2_players[client].lastUber = GetEntPropFloat(GetPlayerWeaponSlot(client, 1), Prop_Send, "m_flChargeLevel");
 
 	int attackerId = event.GetInt("attacker");
 	int attacker = GetClientOfUserId(attackerId);
@@ -648,21 +649,31 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 		}
 	}
 
-	if (tf2_players[client].shockCharge != 30)
-	{
-		tf2_players[client].shockCharge = 30;
-	}
-	if (TF2_GetPlayerClass(client) == TFClassType:TFClass_Medic)
-	{
-		if (GetEntProp(GetPlayerWeaponSlot(client, 2), Prop_Send, "m_iItemDefinitionIndex") == 173)
-		{
-			tf2_players[client].lastUber = GetEntPropFloat(GetPlayerWeaponSlot(client, 1), Prop_Send, "m_flChargeLevel");
-		}
-	}
 	if (tf2_players[attacker].scytheWeapon != 0 && TF2_IsPlayerInCondition(client, TFCond_OnFire))
-	{
 		tf2_players[attacker].healCount += 4;
-		return Plugin_Changed;
+
+	if (tf2_players[client].scytheWeapon != 0 && TF2_IsPlayerInCondition(attacker, TFCond_OnFire))
+	{
+		if (TF2_IsPlayerInCondition(attacker, TFCond_OnFire))
+		{
+			TF2_RemoveCondition(attacker, TFCond_OnFire);
+			int targets[2];
+			targets[0] = client;
+			targets[1] = attacker;
+			for (int i = 0; i < 2; i++)
+			{
+				EmitSoundToClient(
+					targets[i],
+					SOUND_FLAME_OUT,
+					SOUND_FROM_PLAYER,
+					SNDCHAN_AUTO,
+					SNDLEVEL_NORMAL,
+					SND_NOFLAGS,
+					0.4,
+					SNDPITCH_NORMAL
+				);
+			}
+		}
 	}
 	return Plugin_Continue;
 }
@@ -809,7 +820,6 @@ public Action Timer_HealTimer(Handle timer)
         {
             tf2_players[client].healCount--;
             AddPlayerHealth(client, tf2_players[client].lastAfterburnDamage, 1.0, false, true);
-            EmitSoundToClient(client, SOUND_DISPENSER_METAL);
         }
 
         // Shock charge refill runs independently
@@ -1076,7 +1086,7 @@ public Action OnTakeDamage(client, &attacker, &inflictor, &Float:damage, &damage
 			if (!IsPlayerAlive(attacker)) return Plugin_Continue;
 			tf2_players[attacker].scytheWeapon = CheckScythe(attacker);
 			if (tf2_players[attacker].scytheWeapon != 0) {
-				int heal = RoundToNearest(damage) * 2;
+				int heal = RoundToNearest(damage);
 				tf2_players[attacker].lastAfterburnDamage = heal;
 				if (tf2_players[attacker].scytheWeapon == 2) {
 					AddPlayerHealth(attacker, heal, 1.0, false, true);
