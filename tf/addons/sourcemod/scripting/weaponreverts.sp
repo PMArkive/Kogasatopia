@@ -632,18 +632,17 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 	if (attacker > 0 && attacker <= MaxClients && IsClientInGame(attacker))
 	{
 		int activeWeapon = GetEntPropEnt(attacker, Prop_Send, "m_hActiveWeapon");
-		if (activeWeapon > MaxClients && IsValidEntity(activeWeapon))
+		if (!(activeWeapon > MaxClients && IsValidEntity(activeWeapon)))
+			return Plugin_Continue;
+		if (TF2CustAttr_GetFloat(activeWeapon, ATTR_SECONDARY_AMMO_REFILL, 0.0) > 0.0)
 		{
-			if (TF2CustAttr_GetFloat(activeWeapon, ATTR_SECONDARY_AMMO_REFILL, 0.0) > 0.0)
+			int primary = GetPlayerWeaponSlot(attacker, 0);
+			if (primary > MaxClients && IsValidEntity(primary))
 			{
-				int primary = GetPlayerWeaponSlot(attacker, 0);
-				if (primary > MaxClients && IsValidEntity(primary))
+				int maxClip = GetWeaponMaxClip(primary);
+				if (maxClip > 0)
 				{
-					int maxClip = GetWeaponMaxClip(primary);
-					if (maxClip > 0)
-					{
-						SetClip_Weapon(primary, maxClip);
-					}
+					SetClip_Weapon(primary, maxClip);
 				}
 			}
 		}
@@ -1108,8 +1107,11 @@ public Action OnTakeDamage(client, &attacker, &inflictor, &Float:damage, &damage
 			EmitAmbientSound(SOUND_NEON_SIGN, damagePosition, client, SNDLEVEL_NORMAL);
 			return Plugin_Changed;
 		} else if ((weapon != -1) && (TF2CustAttr_GetInt(weapon, "hitscan ignite targets") != 0)) {
-			TF2_IgnitePlayer(client, attacker, 2.0);
-			return Plugin_Changed;
+			if (GetClientDistance(client, attacker) <= 1024.0) {
+				TF2_IgnitePlayer(client, attacker, 4.0);
+				return Plugin_Changed;
+			}
+		return Plugin_Continue;
 		}
 	}
 		
