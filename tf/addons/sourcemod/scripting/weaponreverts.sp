@@ -57,7 +57,6 @@ tf2_player tf2_players[MAXPLAYERS + 1];
 enum struct tf2_player
 {
 	int jump_status;
-	int lastAfterburnDamage;
 	int scytheWeapon;
 	int shockCharge;
 	int healCount;
@@ -112,7 +111,6 @@ public Plugin myinfo =
 stock void ResetClientArrays(int client)
 {
 	if (client <= 0 || client > MaxClients) return;
-	tf2_players[client].lastAfterburnDamage = 0;
 	tf2_players[client].scytheWeapon = 0;
 	tf2_players[client].shockCharge = 30;
 	tf2_players[client].healCount = 0;
@@ -136,6 +134,7 @@ stock void ResetClientArrays(int client)
 }
 
 public void OnPluginStart() {
+	PreCacheWeaponSounds();
 	g_sEnabled = CreateConVar("reverts_enabled", "1", "Enable/Disable the plugin");
 	g_hPomsonDamageMult = CreateConVar("reverts_pomson_damage_mult", "0.50", "Damage multiplier for the Pomson 6000", FCVAR_NONE, true, 0.1, true, 2.0);
 	g_hBisonDamageMult = CreateConVar("reverts_bison_damage_mult", "0.8", "Damage multiplier for the Righteous Bison", FCVAR_NONE, true, 0.1, true, 2.0);
@@ -239,7 +238,7 @@ public void OnPluginStart() {
 	}
 }
 
-public void OnMapStart() {
+public void PreCacheWeaponSounds() {
 	PrecacheSound(SOUND_ARROW_HEAL, true);
 	PrecacheSound(SOUND_NEON_SIGN, true);
 	PrecacheSound(SOUND_FLAME_OUT, true);
@@ -248,6 +247,10 @@ public void OnMapStart() {
 	PrecacheSound(ACC_NOTIFY_2, true);
 	PrecacheSound(BURP_SOUND, true);
 	PrecacheSound(ATTR_SECONDARY_REFILL_SOUND, true);
+}
+
+public void OnMapStart() {
+	PreCacheWeaponSounds();
 	StartHealTimer();
 }
 
@@ -800,9 +803,9 @@ public Action TF2_CalcIsAttackCritical(client, weapon, String:weaponname[], &boo
 	velocity[1] -= push * Sine(yaw);
 	velocity[2] -= 280.0 * Sine(pitch);
 
-	int health = GetClientHealth(client);
-	float rounded = float(RoundFloat(float(health) * 0.10));
-	SDKHooks_TakeDamage(client, client, client, rounded, DMG_CLUB, 0);
+	//int health = GetClientHealth(client);
+	//float rounded = float(RoundFloat(float(health) * 0.10));
+	//SDKHooks_TakeDamage(client, client, client, rounded, DMG_CLUB, 0);
 
 	TeleportEntity(client, NULL_VECTOR, NULL_VECTOR, velocity);
 	return Plugin_Changed;
@@ -819,7 +822,8 @@ public Action Timer_HealTimer(Handle timer)
 				CheckScythe(client) == 2)
         {
             tf2_players[client].healCount--;
-            AddPlayerHealth(client, tf2_players[client].lastAfterburnDamage, 1.0, false, true);
+            AddPlayerHealth(client, 4, 1.0, false, true);
+			//EmitAmbientSound(SOUND_DISPENSER_METAL, damagePosition, client, SNDLEVEL_NORMAL);
         }
 
         // Shock charge refill runs independently
@@ -1086,10 +1090,9 @@ public Action OnTakeDamage(client, &attacker, &inflictor, &Float:damage, &damage
 			if (!IsPlayerAlive(attacker)) return Plugin_Continue;
 			tf2_players[attacker].scytheWeapon = CheckScythe(attacker);
 			if (tf2_players[attacker].scytheWeapon != 0) {
-				int heal = RoundToNearest(damage);
-				tf2_players[attacker].lastAfterburnDamage = heal;
 				if (tf2_players[attacker].scytheWeapon == 2) {
-					AddPlayerHealth(attacker, heal, 1.0, false, true);
+					AddPlayerHealth(attacker, 4, 1.0, false, true);
+					//EmitAmbientSound(SOUND_DISPENSER_METAL, damagePosition, attacker, SNDLEVEL_NORMAL);
 					return Plugin_Changed;
 				} else {
 					// Queue the heal for the timer instead of extinguishing
@@ -1607,11 +1610,15 @@ public TF2Items_OnGiveNamedItem_Post(client, String:classname[], index, level, q
 			{
 				TF2Attrib_SetByName(entity, "blast dmg to self increased", 0.75); // Halve the blast damage penalty
 			}
-			case 215: //The Degreaser
+			case 215: // The Degreaser
 			{
 				TF2Attrib_SetByName(entity, "deploy time decreased", 0.65); // Modify all swap speeds
 				TF2Attrib_SetByName(entity, "switch from wep deploy time decreased", 1.00); // Remove the holster bonus
 				TF2Attrib_SetByName(entity, "single wep deploy time decreased", 1.00); // Remove the deploy bonus
+			}
+			case 595: // The Manmelter
+			{
+				TF2Attrib_SetByName(entity, "damage bonus", 1.20);
 			}
 			case 1178: // The Dragon's Fury
 			{
