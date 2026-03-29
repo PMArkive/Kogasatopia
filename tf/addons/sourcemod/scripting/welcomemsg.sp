@@ -5,6 +5,8 @@
 bool g_HasBeenWelcomed[MAXPLAYERS + 1];
 ConVar g_hUncleCycleState;
 ConVar g_hNewsMode;
+ConVar g_hNewsText;
+ConVar g_hNewsGitFormat;
 ConVar g_hGitRepoName;
 ConVar g_hGitRepoBranch;
 ConVar g_hGitRepoCommitShort;
@@ -195,6 +197,8 @@ public OnPluginStart()
     HookEvent("player_spawn", Event_PlayerSpawn);
     g_hUncleCycleState = FindConVar("uncle_cycle_active");
     g_hNewsMode = CreateConVar("sm_wsmg_newsmode", "0", "Use g_WelcomeMsgGit instead of g_WelcomeMsg for welcome/news output.", _, true, 0.0, true, 1.0);
+    g_hNewsText = CreateConVar("sm_wsmg_news", "", "News line used by the welcome message and !news.");
+    g_hNewsGitFormat = CreateConVar("sm_wsmg_news_git", "{unique}Git info: {default}%s, %s, %s, %s, %s{default}", "Git news format used by !news and git welcome mode.");
     
     RegConsoleCmd("sm_info", Command_ListInfo, "Displays an brief message to the client about the server.");
     RegConsoleCmd("sm_c", Command_InfoC, "Lists custom class weapon data to the client");
@@ -219,16 +223,14 @@ public OnPluginStart()
 static const char g_WelcomeMsg[][] = {
     "{peachpuff}Welcome to {unique}Gensokyo{peachpuff} %N!",
     "{peachpuff}This server has buffs for bad weapons and some new weapons;",
-    "{peachpuff}Read more with {lightskyblue}!info{peachpuff} or see our group at {unique}!steam",
-    "{unique}News: {default}the Desert Eagle has been re-added with a model + sounds, more custom sounds work like Flame Shotgun alerts, made the Hitscan Flamethrower more fun to use, added Hitscan Flamethrower & Flaregun to !cw, added !feedback"
+    "{peachpuff}Read more with {lightskyblue}!info{peachpuff} or see our group at {unique}!steam"
 };
 
 // Welcome message components with git plugin
 static const char g_WelcomeMsgGit[][] = {
     "{peachpuff}Welcome to {unique}Gensokyo{peachpuff} %N!",
     "{peachpuff}This server has buffs for bad weapons and some new weapons;",
-    "{peachpuff}Read more with {lightskyblue}!info{peachpuff} or see our group at {unique}!steam",
-    "{unique}Git info: {default}%s, %s, %s, %s, %s{default}"
+    "{peachpuff}Read more with {lightskyblue}!info{peachpuff} or see our group at {unique}!steam"
 };
 
 static const char g_UncleWelcomeMsg[][] = {
@@ -305,6 +307,8 @@ static void PrintSelectedWelcomeMessage(int client)
 
     for (int i = 1; i < sizeof(g_WelcomeMsg); i++)
         CPrintToChat(client, "%s", g_WelcomeMsg[i]);
+
+    PrintConfiguredNewsLine(client);
 }
 
 static void RefreshGitDisplayConVars()
@@ -333,9 +337,20 @@ static void GetGitDisplayString(ConVar cvar, const char[] fallback, char[] buffe
     strcopy(buffer, maxlen, fallback);
 }
 
-static void PrintGitWelcomeMessage(int client)
+static void GetConfiguredNewsLine(char[] buffer, int maxlen)
 {
-    char buffer[512];
+    if (g_hNewsText != null)
+    {
+        GetConVarString(g_hNewsText, buffer, maxlen);
+        return;
+    }
+
+    buffer[0] = '\0';
+}
+
+static void FormatConfiguredGitNewsLine(char[] buffer, int maxlen)
+{
+    char formatString[256];
     char repoName[128];
     char branch[64];
     char commitShort[32];
@@ -344,11 +359,10 @@ static void PrintGitWelcomeMessage(int client)
 
     RefreshGitDisplayConVars();
 
-    Format(buffer, sizeof(buffer), g_WelcomeMsgGit[0], client);
-    CPrintToChat(client, "%s", buffer);
-
-    for (int i = 1; i < sizeof(g_WelcomeMsgGit) - 1; i++)
-        CPrintToChat(client, "%s", g_WelcomeMsgGit[i]);
+    if (g_hNewsGitFormat != null)
+        GetConVarString(g_hNewsGitFormat, formatString, sizeof(formatString));
+    else
+        strcopy(formatString, sizeof(formatString), "{unique}Git info: {default}%s, %s, %s, %s, %s{default}");
 
     GetGitDisplayString(g_hGitRepoName, "unknown repo", repoName, sizeof(repoName));
     GetGitDisplayString(g_hGitRepoBranch, "unknown branch", branch, sizeof(branch));
@@ -356,7 +370,27 @@ static void PrintGitWelcomeMessage(int client)
     GetGitDisplayString(g_hGitRepoCommitMessage, "no commit message", commitMessage, sizeof(commitMessage));
     GetGitDisplayString(g_hGitRepoCommitDate, "unknown date", commitDate, sizeof(commitDate));
 
-    Format(buffer, sizeof(buffer), g_WelcomeMsgGit[sizeof(g_WelcomeMsgGit) - 1], repoName, branch, commitShort, commitMessage, commitDate);
+    Format(buffer, maxlen, formatString, repoName, branch, commitShort, commitMessage, commitDate);
+}
+
+static void PrintConfiguredNewsLine(int client)
+{
+    char buffer[512];
+    GetConfiguredNewsLine(buffer, sizeof(buffer));
+    CPrintToChat(client, "%s", buffer);
+}
+
+static void PrintGitWelcomeMessage(int client)
+{
+    char buffer[512];
+
+    Format(buffer, sizeof(buffer), g_WelcomeMsgGit[0], client);
+    CPrintToChat(client, "%s", buffer);
+
+    for (int i = 1; i < sizeof(g_WelcomeMsgGit); i++)
+        CPrintToChat(client, "%s", g_WelcomeMsgGit[i]);
+
+    FormatConfiguredGitNewsLine(buffer, sizeof(buffer));
     CPrintToChat(client, "%s", buffer);
 }
 
@@ -389,7 +423,13 @@ public Action:Command_cmds(int client, int args)
 
 public Action:Command_news(int client, int args)
 {
-    PrintSelectedWelcomeMessage(client);
+    char buffer[512];
+
+    GetConfiguredNewsLine(buffer, sizeof(buffer));
+    CPrintToChat(client, "%s", buffer);
+
+    FormatConfiguredGitNewsLine(buffer, sizeof(buffer));
+    CPrintToChat(client, "%s", buffer);
     return Plugin_Handled;
 }
 
