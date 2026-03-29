@@ -198,7 +198,7 @@ public OnPluginStart()
     g_hUncleCycleState = FindConVar("uncle_cycle_active");
     g_hNewsMode = CreateConVar("sm_wsmg_newsmode", "0", "Use g_WelcomeMsgGit instead of g_WelcomeMsg for welcome/news output.", _, true, 0.0, true, 1.0);
     g_hNewsText = CreateConVar("sm_wsmg_news", "", "News line used by the welcome message and !news.");
-    g_hNewsGitFormat = CreateConVar("sm_wsmg_news_git", "{unique}Git info: {default}%s, %s, %s, %s, %s{default}", "Git news format used by !news and git welcome mode.");
+    g_hNewsGitFormat = CreateConVar("sm_wsmg_news_git", "{green}Git info: {default}%s, %s, %s, %s, %s{default}", "Git news format used by !news and git welcome mode.");
     
     RegConsoleCmd("sm_info", Command_ListInfo, "Displays an brief message to the client about the server.");
     RegConsoleCmd("sm_c", Command_InfoC, "Lists custom class weapon data to the client");
@@ -362,7 +362,7 @@ static void FormatConfiguredGitNewsLine(char[] buffer, int maxlen)
     if (g_hNewsGitFormat != null)
         GetConVarString(g_hNewsGitFormat, formatString, sizeof(formatString));
     else
-        strcopy(formatString, sizeof(formatString), "{unique}Git info: {default}%s, %s, %s, %s, %s{default}");
+        strcopy(formatString, sizeof(formatString), "{green}Git info: {default}%s, %s, %s, %s, %s{default}");
 
     GetGitDisplayString(g_hGitRepoName, "unknown repo", repoName, sizeof(repoName));
     GetGitDisplayString(g_hGitRepoBranch, "unknown branch", branch, sizeof(branch));

@@ -193,10 +193,10 @@ public Action Command_ShowGitDisplay(int client, int args)
     g_hRepoCommitMessage.GetString(commitMessage, sizeof(commitMessage));
     g_hRepoCommitDate.GetString(commitDate, sizeof(commitDate));
 
-    ReplyToCommand(client, "[Git Display] %s, %s", repoName, branch);
-    ReplyToCommand(client, "[Git Display] %s", commitShort);
-    ReplyToCommand(client, "[Git Display] %s", commitMessage);
-    ReplyToCommand(client, "[Git Display] %s", commitDate);
+    CPrintToChat(client, "{green}[Git Display]{default} %s, %s", repoName, branch);
+    CPrintToChat(client, "{green}[Git Display]{default} %s", commitShort);
+    CPrintToChat(client, "{green}[Git Display]{default} %s", commitMessage);
+    CPrintToChat(client, "{green}[Git Display]{default} %s", commitDate);
     return Plugin_Handled;
 }
 
