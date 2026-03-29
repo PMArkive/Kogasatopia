@@ -1,4 +1,5 @@
 #include <sourcemod>
+#include <morecolors>
 
 #pragma semicolon 1
 #pragma newdecls required
@@ -25,6 +26,7 @@ ConVar g_hRepoName = null;
 ConVar g_hRepoBranch = null;
 ConVar g_hRepoCommit = null;
 ConVar g_hRepoCommitShort = null;
+ConVar g_hRepoCommitMessage = null;
 ConVar g_hRepoCommitDate = null;
 ConVar g_hRepoCommitUnix = null;
 ConVar g_hRepoCommitTimezone = null;
@@ -42,7 +44,7 @@ public void OnPluginStart()
     );
     g_hRefreshSeconds = CreateConVar(
         "sm_gitrepo_refresh_seconds",
-        "60.0",
+        "300.0",
         "How often to refresh git metadata from disk. Set to 0 to disable polling.",
         FCVAR_NONE
     );
@@ -89,6 +91,12 @@ public void OnPluginStart()
         "Resolved short HEAD commit hash.",
         FCVAR_NOTIFY | FCVAR_DONTRECORD
     );
+    g_hRepoCommitMessage = CreateConVar(
+        "sm_gitrepo_commit_message",
+        "",
+        "Last HEAD reflog message, truncated to 256 characters.",
+        FCVAR_NOTIFY | FCVAR_DONTRECORD
+    );
     g_hRepoCommitDate = CreateConVar(
         "sm_gitrepo_commit_date",
         "",
@@ -113,6 +121,9 @@ public void OnPluginStart()
     HookConVarChange(g_hRepoNameOverride, ConVarChanged_Refresh);
 
     RegAdminCmd("sm_gitrepo_refresh", Command_RefreshGitRepo, ADMFLAG_GENERIC, "Refresh git repo display ConVars now.");
+    RegConsoleCmd("sm_git", Command_ShowGitDisplay, "Show git repository display metadata.");
+    RegConsoleCmd("sm_repo", Command_ShowGitDisplay, "Show git repository display metadata.");
+    RegConsoleCmd("sm_github", Command_ShowGitDisplay, "Show git repository display metadata.");
 
     AutoExecConfig(true, "git_repo_display");
     RefreshTimer();
@@ -165,6 +176,27 @@ public Action Command_RefreshGitRepo(int client, int args)
         error[0] ? " error=" : "",
         error
     );
+    return Plugin_Handled;
+}
+
+public Action Command_ShowGitDisplay(int client, int args)
+{
+    char repoName[128];
+    char branch[128];
+    char commitShort[16];
+    char commitMessage[257];
+    char commitDate[64];
+
+    g_hRepoName.GetString(repoName, sizeof(repoName));
+    g_hRepoBranch.GetString(branch, sizeof(branch));
+    g_hRepoCommitShort.GetString(commitShort, sizeof(commitShort));
+    g_hRepoCommitMessage.GetString(commitMessage, sizeof(commitMessage));
+    g_hRepoCommitDate.GetString(commitDate, sizeof(commitDate));
+
+    ReplyToCommand(client, "[Git Display] %s, %s", repoName, branch);
+    ReplyToCommand(client, "[Git Display] %s", commitShort);
+    ReplyToCommand(client, "[Git Display] %s", commitMessage);
+    ReplyToCommand(client, "[Git Display] %s", commitDate);
     return Plugin_Handled;
 }
 
@@ -221,6 +253,7 @@ bool RefreshGitMetadata(bool logFailures)
     char branch[128];
     char commitHash[64];
     char shortHash[16];
+    char commitMessage[257];
     char commitDate[64];
     char commitUnix[16];
     char commitTimezone[16];
@@ -245,11 +278,12 @@ bool RefreshGitMetadata(bool logFailures)
     }
 
     char dateError[256];
-    if (ResolveHeadDate(gitDir, commitDate, sizeof(commitDate), commitUnix, sizeof(commitUnix), commitTimezone, sizeof(commitTimezone), dateError, sizeof(dateError)))
+    if (ResolveHeadDate(gitDir, commitDate, sizeof(commitDate), commitUnix, sizeof(commitUnix), commitTimezone, sizeof(commitTimezone), commitMessage, sizeof(commitMessage), dateError, sizeof(dateError)))
     {
         g_hRepoCommitDate.SetString(commitDate, true, true);
         g_hRepoCommitUnix.SetString(commitUnix, true, true);
         g_hRepoCommitTimezone.SetString(commitTimezone, true, true);
+        g_hRepoCommitMessage.SetString(commitMessage, true, true);
         haveDate = true;
     }
     else
@@ -257,6 +291,7 @@ bool RefreshGitMetadata(bool logFailures)
         g_hRepoCommitDate.SetString("", true, true);
         g_hRepoCommitUnix.SetString("", true, true);
         g_hRepoCommitTimezone.SetString("", true, true);
+        g_hRepoCommitMessage.SetString("", true, true);
         if (error[0] == '\0')
         {
             strcopy(error, sizeof(error), dateError);
@@ -284,6 +319,7 @@ void ClearDisplayMetadata(const char[] status, const char[] error, bool logFailu
     g_hRepoBranch.SetString("", true, true);
     g_hRepoCommit.SetString("", true, true);
     g_hRepoCommitShort.SetString("", true, true);
+    g_hRepoCommitMessage.SetString("", true, true);
     g_hRepoCommitDate.SetString("", true, true);
     g_hRepoCommitUnix.SetString("", true, true);
     g_hRepoCommitTimezone.SetString("", true, true);
@@ -449,7 +485,7 @@ bool ResolveHeadCommit(const char[] gitDir, char[] refPath, int refPathMax, char
     return true;
 }
 
-bool ResolveHeadDate(const char[] gitDir, char[] commitDate, int commitDateMax, char[] commitUnix, int commitUnixMax, char[] commitTimezone, int commitTimezoneMax, char[] error, int errorMax)
+bool ResolveHeadDate(const char[] gitDir, char[] commitDate, int commitDateMax, char[] commitUnix, int commitUnixMax, char[] commitTimezone, int commitTimezoneMax, char[] commitMessage, int commitMessageMax, char[] error, int errorMax)
 {
     char reflogPath[PLATFORM_MAX_PATH];
     JoinPath(gitDir, "logs/HEAD", reflogPath, sizeof(reflogPath));
@@ -470,6 +506,7 @@ bool ResolveHeadDate(const char[] gitDir, char[] commitDate, int commitDateMax, 
 
     FormatTime(commitDate, commitDateMax, "%Y-%m-%d %H:%M:%S", timestamp);
     IntToString(timestamp, commitUnix, commitUnixMax);
+    ParseReflogMessage(lastLine, commitMessage, commitMessageMax);
     return true;
 }
 
@@ -654,6 +691,28 @@ bool ParseReflogTimestamp(const char[] reflogLine, int &timestamp, char[] timezo
 
     timestamp = StringToInt(working[previousSpace + 1]);
     return timestamp > 0;
+}
+
+void ParseReflogMessage(const char[] reflogLine, char[] commitMessage, int commitMessageMax)
+{
+    commitMessage[0] = '\0';
+
+    int tabPos = FindCharInString(reflogLine, '\t');
+    if (tabPos == -1 || reflogLine[tabPos + 1] == '\0')
+    {
+        return;
+    }
+
+    strcopy(commitMessage, commitMessageMax, reflogLine[tabPos + 1]);
+    TrimString(commitMessage);
+
+    int labelPos = StrContains(commitMessage, ": ");
+    if (labelPos != -1 && labelPos < 32 && commitMessage[labelPos + 2] != '\0')
+    {
+        char trimmed[257];
+        strcopy(trimmed, sizeof(trimmed), commitMessage[labelPos + 2]);
+        strcopy(commitMessage, commitMessageMax, trimmed);
+    }
 }
 
 void ExtractBranchName(const char[] refPath, char[] branch, int branchMax)
