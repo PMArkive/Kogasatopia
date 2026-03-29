@@ -4,6 +4,12 @@
 
 bool g_HasBeenWelcomed[MAXPLAYERS + 1];
 ConVar g_hUncleCycleState;
+ConVar g_hNewsMode;
+ConVar g_hGitRepoName;
+ConVar g_hGitRepoBranch;
+ConVar g_hGitRepoCommitShort;
+ConVar g_hGitRepoCommitMessage;
+ConVar g_hGitRepoCommitDate;
 
 static const char g_Info[][] = {
     "{peachpuff}Some weapons have better stats; use {yellow}!r {peachpuff}to read about your class.\n",
@@ -30,6 +36,7 @@ static const char g_ScoutCustom[][] = {
     "\x01 [Primary] Original Baby Face: {green}+40% accuracy, 6 clip size,\x07FF0000 -30% damage, -35% base movement speed, boost resets on any jump\n",
     "\x01 [Primary] Vanilla Baby Face\n",
     "\x01[Secondary] Reisen's Bunny Pistol:{green}+35% jump height, +30% damage,{red} consecutive shots become less accurate, 50% fire rate penalty\n",
+    "\x01[Secondary] Desert Eagle: {green}Can headshot, +70%, damage, +50% more accurate,{red} 45% slower fire rate, 40% smaller clip size, crits have falloff\n",
     "\x01 [Secondary] Lightning Pistol: {chartreuse}+35% firing rate, +200% clip size, 40% more accurate, +100% ammo,{red} -40% damage, -15% reload speed\n",
     "\x01 [Secondary] Sproke (Redbull on Blu): {green}Ammo becomes magazine for 12 seconds, {red}ammo is set to 0 when effect ends,{default} FaN/Popper receive +25% reload speed instead",
     "\x01[Secondary] Conagher's Bull: Drain 25 ammo from buildings on hit, first shot deals 300 damage to enemies holding the same weapon, 60% tighter spread\n",
@@ -64,8 +71,10 @@ static const char g_PyroReverts[][] = {
 
 static const char g_PyroCustom[][] = {
     "\x01[Primary] Stock Shotgun\n",
+    "\x01[Primary] Hitscan Flamethrower: Fires three bullets that ignite targets within Ambassador range, deals 65 base damage, consumes 10 ammo per shot\n",
     "\x01[Secondary] Hoshino's Shotgun - Stock Reskin\n",
-    "\x01[Secondary] Flame Shotgun: {green}Hitting a target accurately twice or killing them creates a fiery explosion, accurate shots cost no ammo,{red} -15% clip size, -30% damage penalty\n",
+    "\x01[Secondary] Flame Shotgun: {green}Hitting a target accurately twice creates a fiery explosion, accurate shots cost no ammo,{red} -15% clip size, -30% damage penalty\n",
+    "\x01[Secondary] Hitscan Flaregun: Fires one bullet that deals 65 base damage, mini crits burning targets\n",
     "\x01[Secondary] TF2C Twin Barrel: {chartreuse}Holster reload, +20% bullets per shot, first shot is a recoil jump,{red} 10% wider spread, 15% slower draw speed\n",
     "\x01[Secondary] Old Panic Attack: {green}Hold fire to load up to 4 shells, fires faster as HP decreases\n",
     "\x01[Secondary] The Family Business\n",
@@ -185,6 +194,7 @@ public OnPluginStart()
 {
     HookEvent("player_spawn", Event_PlayerSpawn);
     g_hUncleCycleState = FindConVar("uncle_cycle_active");
+    g_hNewsMode = CreateConVar("sm_wsmg_newsmode", "0", "Use g_WelcomeMsgGit instead of g_WelcomeMsg for welcome/news output.", _, true, 0.0, true, 1.0);
     
     RegConsoleCmd("sm_info", Command_ListInfo, "Displays an brief message to the client about the server.");
     RegConsoleCmd("sm_c", Command_InfoC, "Lists custom class weapon data to the client");
@@ -210,7 +220,15 @@ static const char g_WelcomeMsg[][] = {
     "{peachpuff}Welcome to {unique}Gensokyo{peachpuff} %N!",
     "{peachpuff}This server has buffs for bad weapons and some new weapons;",
     "{peachpuff}Read more with {lightskyblue}!info{peachpuff} or see our group at {unique}!steam",
-    "{unique}News: {default}Made scrambles ignore Blu stage victories, reworked the Natascha to provide speed, added market garden tracking with !mg and in !points, added Black Watch and Silver Strike from TF2C, added !feedback"
+    "{unique}News: {default}the Desert Eagle has been re-added with a model + sounds, more custom sounds work like Flame Shotgun alerts, made the Hitscan Flamethrower more fun to use, added Hitscan Flamethrower & Flaregun to !cw, added !feedback"
+};
+
+// Welcome message components with git plugin
+static const char g_WelcomeMsgGit[][] = {
+    "{peachpuff}Welcome to {unique}Gensokyo{peachpuff} %N!",
+    "{peachpuff}This server has buffs for bad weapons and some new weapons;",
+    "{peachpuff}Read more with {lightskyblue}!info{peachpuff} or see our group at {unique}!steam",
+    "{unique}Git info: {default}%s, %s, %s, %s, %s{default}"
 };
 
 static const char g_UncleWelcomeMsg[][] = {
@@ -267,12 +285,79 @@ static void SendWelcomeNow(int client)
     }
     else
     {
-        Format(buffer, sizeof(buffer), g_WelcomeMsg[0], client);
-        CPrintToChat(client, "%s", buffer);
-        
-		for (int i = 1; i < sizeof(g_WelcomeMsg); i++)
-			CPrintToChat(client, "%s", g_WelcomeMsg[i]);
+        PrintSelectedWelcomeMessage(client);
 	}
+}
+
+static void PrintSelectedWelcomeMessage(int client)
+{
+    char buffer[256];
+    bool useGitMessage = (g_hNewsMode != null && g_hNewsMode.BoolValue);
+
+    if (useGitMessage)
+    {
+        PrintGitWelcomeMessage(client);
+        return;
+    }
+
+    Format(buffer, sizeof(buffer), g_WelcomeMsg[0], client);
+    CPrintToChat(client, "%s", buffer);
+
+    for (int i = 1; i < sizeof(g_WelcomeMsg); i++)
+        CPrintToChat(client, "%s", g_WelcomeMsg[i]);
+}
+
+static void RefreshGitDisplayConVars()
+{
+    if (g_hGitRepoName == null)
+        g_hGitRepoName = FindConVar("sm_gitrepo_name");
+    if (g_hGitRepoBranch == null)
+        g_hGitRepoBranch = FindConVar("sm_gitrepo_branch");
+    if (g_hGitRepoCommitShort == null)
+        g_hGitRepoCommitShort = FindConVar("sm_gitrepo_commit_short");
+    if (g_hGitRepoCommitMessage == null)
+        g_hGitRepoCommitMessage = FindConVar("sm_gitrepo_commit_message");
+    if (g_hGitRepoCommitDate == null)
+        g_hGitRepoCommitDate = FindConVar("sm_gitrepo_commit_date");
+}
+
+static void GetGitDisplayString(ConVar cvar, const char[] fallback, char[] buffer, int maxlen)
+{
+    if (cvar != null)
+    {
+        GetConVarString(cvar, buffer, maxlen);
+        if (buffer[0] != '\0')
+            return;
+    }
+
+    strcopy(buffer, maxlen, fallback);
+}
+
+static void PrintGitWelcomeMessage(int client)
+{
+    char buffer[512];
+    char repoName[128];
+    char branch[64];
+    char commitShort[32];
+    char commitMessage[257];
+    char commitDate[64];
+
+    RefreshGitDisplayConVars();
+
+    Format(buffer, sizeof(buffer), g_WelcomeMsgGit[0], client);
+    CPrintToChat(client, "%s", buffer);
+
+    for (int i = 1; i < sizeof(g_WelcomeMsgGit) - 1; i++)
+        CPrintToChat(client, "%s", g_WelcomeMsgGit[i]);
+
+    GetGitDisplayString(g_hGitRepoName, "unknown repo", repoName, sizeof(repoName));
+    GetGitDisplayString(g_hGitRepoBranch, "unknown branch", branch, sizeof(branch));
+    GetGitDisplayString(g_hGitRepoCommitShort, "unknown head", commitShort, sizeof(commitShort));
+    GetGitDisplayString(g_hGitRepoCommitMessage, "no commit message", commitMessage, sizeof(commitMessage));
+    GetGitDisplayString(g_hGitRepoCommitDate, "unknown date", commitDate, sizeof(commitDate));
+
+    Format(buffer, sizeof(buffer), g_WelcomeMsgGit[sizeof(g_WelcomeMsgGit) - 1], repoName, branch, commitShort, commitMessage, commitDate);
+    CPrintToChat(client, "%s", buffer);
 }
 
 public bool IsUncleCycleActive()
@@ -304,12 +389,7 @@ public Action:Command_cmds(int client, int args)
 
 public Action:Command_news(int client, int args)
 {
-    char buffer[256];
-        Format(buffer, sizeof(buffer), g_WelcomeMsg[0], client);
-    CPrintToChat(client, "%s", buffer);
-    
-    for (int i = 1; i < sizeof(g_WelcomeMsg); i++)
-        CPrintToChat(client, "%s", g_WelcomeMsg[i]);
+    PrintSelectedWelcomeMessage(client);
     return Plugin_Handled;
 }
 
