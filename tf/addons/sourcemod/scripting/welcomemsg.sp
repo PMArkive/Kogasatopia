@@ -222,15 +222,14 @@ public OnPluginStart()
 // Welcome message components
 static const char g_WelcomeMsg[][] = {
     "{peachpuff}Welcome to {unique}Gensokyo{peachpuff} %N!",
-    "{peachpuff}This server has buffs for bad weapons and some new weapons;",
-    "{peachpuff}Read more with {lightskyblue}!info{peachpuff} or see our group at {unique}!steam"
+    "{peachpuff}This server has new weapons and stuff like that; use {lightskyblue}!info{}",
+    "{peachpuff}Read more with {peachpuff} or see our group at {unique}!steam"
 };
 
 // Welcome message components with git plugin
 static const char g_WelcomeMsgGit[][] = {
     "{peachpuff}Welcome to {unique}Gensokyo{peachpuff} %N!",
-    "{peachpuff}This server has buffs for bad weapons and some new weapons;",
-    "{peachpuff}Read more with {lightskyblue}!info{peachpuff} or see our group at {unique}!steam"
+    "{peachpuff}This server has new weapons and stuff like that; use {lightskyblue}!info{default} or {gold}!steam"
 };
 
 static const char g_UncleWelcomeMsg[][] = {
@@ -361,8 +360,10 @@ static void FormatConfiguredGitNewsLine(char[] buffer, int maxlen)
 
     if (g_hNewsGitFormat != null)
         GetConVarString(g_hNewsGitFormat, formatString, sizeof(formatString));
-    else
+    else {
+        GetConVarString(g_hNewsGitFormat, formatString, sizeof(formatString));
         strcopy(formatString, sizeof(formatString), "{green}Git info: {default}%s, %s, %s, %s, %s{default}");
+    }
 
     GetGitDisplayString(g_hGitRepoName, "unknown repo", repoName, sizeof(repoName));
     GetGitDisplayString(g_hGitRepoBranch, "unknown branch", branch, sizeof(branch));
