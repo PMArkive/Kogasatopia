@@ -33,7 +33,9 @@ int g_iVoteRequests = 0;
 bool g_bVoteRunning = false;
 bool g_bNativeVotes = false;
 bool g_bVoteAllowLowPop = false;
+bool scrambleCooldown = false;
 NativeVote g_hVote = null;
+Handle g_hScrambleCooldownTimer = null;
 ConVar g_hLogEnabled = null;
 ConVar g_hAutoRounds = null;
 ConVar g_hVoteTime = null;
@@ -118,6 +120,7 @@ public void OnLibraryRemoved(const char[] name)
 public void OnMapStart()
 {
     ResetVotes();
+    ClearScrambleCooldown();
     g_iRoundsSinceAuto = 0;
     if (g_hScrambleImmunity != null)
     {
@@ -129,6 +132,7 @@ public void OnMapStart()
 public void OnMapEnd()
 {
     ResetVotes();
+    ClearScrambleCooldown();
     g_iRoundsSinceAuto = 0;
     LogWhale("Map end: votes reset.");
 }
@@ -136,6 +140,7 @@ public void OnMapEnd()
 public void OnPluginEnd()
 {
     ResetVotes();
+    ClearScrambleCooldown();
     LogWhale("Plugin ended.");
 }
 
@@ -213,6 +218,8 @@ public Action SayListener(int client, const char[] command, int argc)
 
 public void Event_RoundWin(Event event, const char[] name, bool dontBroadcast)
 {
+    ClearScrambleCooldown();
+
     if (g_hAutoRounds == null)
     {
         return;
@@ -251,6 +258,13 @@ static void HandleScrambleRequest(int client)
     if (client <= 0 || !IsClientInGame(client) || IsFakeClient(client))
         return;
 
+    if (scrambleCooldown)
+    {
+        CPrintToChat(client, "{blue}[WhaleScramble]{default} Scramble is on cooldown.");
+        LogWhale("Vote request rejected: scramble cooldown active (client %N).", client);
+        return;
+    }
+
     if (g_bVoteRunning || NativeVotes_IsVoteInProgress() || IsVoteInProgress())
     {
         CPrintToChat(client, "{blue}[WhaleScramble]{default} A vote is already running.");
@@ -280,6 +294,17 @@ static void HandleScrambleRequest(int client)
 static bool StartScrambleVote(int client, bool suppressFeedback, bool allowLowPop)
 {
     LogWhale("Starting vote: caller=%d allowLowPop=%d suppressFeedback=%d.", client, allowLowPop ? 1 : 0, suppressFeedback ? 1 : 0);
+
+    if (scrambleCooldown)
+    {
+        if (!suppressFeedback && client > 0 && IsClientInGame(client))
+        {
+            CPrintToChat(client, "{blue}[WhaleScramble]{default} Scramble is on cooldown.");
+        }
+        LogWhale("Vote start failed: scramble cooldown active.");
+        return false;
+    }
+
     if (!g_bNativeVotes)
     {
         if (!suppressFeedback && client > 0 && IsClientInGame(client))
@@ -468,6 +493,29 @@ static void ResetVotes()
     for (int i = 1; i <= MaxClients; i++)
     {
         g_bPlayerVoted[i] = false;
+    }
+}
+
+static void StartScrambleCooldown()
+{
+    scrambleCooldown = true;
+    if (g_hScrambleCooldownTimer != null)
+    {
+        delete g_hScrambleCooldownTimer;
+        g_hScrambleCooldownTimer = null;
+    }
+
+    g_hScrambleCooldownTimer = CreateTimer(120.0, Timer_ResetScrambleCooldown, _, TIMER_FLAG_NO_MAPCHANGE);
+    LogWhale("Scramble cooldown started.");
+}
+
+static void ClearScrambleCooldown()
+{
+    scrambleCooldown = false;
+    if (g_hScrambleCooldownTimer != null)
+    {
+        delete g_hScrambleCooldownTimer;
+        g_hScrambleCooldownTimer = null;
     }
 }
 
@@ -885,6 +933,7 @@ public Action Timer_DoSwap(Handle timer, DataPack pack)
     moved = pairCount * 2;
     if (moved > 0)
     {
+        StartScrambleCooldown();
         CPrintToChatAll("{tomato}[{purple}Gap{tomato}]{default} {gold}Whalescrambling{default} %d players!", moved);
         LogWhale("Scramble executed: moved=%d pairs=%d.", moved, pairCount);
         for (int i = 0; i < pairCount; i++)
@@ -953,6 +1002,17 @@ public Action Timer_DoSwap(Handle timer, DataPack pack)
         }
         LogWhale("Scramble executed: no eligible pairs.");
     }
+    return Plugin_Stop;
+}
+
+public Action Timer_ResetScrambleCooldown(Handle timer)
+{
+    if (timer == g_hScrambleCooldownTimer)
+    {
+        g_hScrambleCooldownTimer = null;
+    }
+    scrambleCooldown = false;
+    LogWhale("Scramble cooldown expired.");
     return Plugin_Stop;
 }
 
