@@ -677,6 +677,7 @@ static bool StartRandomWhaleScramble(int issuer, bool broadcastFailures, bool al
         else bluCount++;
 
         if (IsScrambleImmune(i)) continue;
+        if (!IsSimpleScrambleEligibleClass(i)) continue;
 
         if (team == TEAM_RED)
         {
@@ -1005,6 +1006,17 @@ static int GetScrambleScore(int client, bool ignoreClass)
     }
 
     return GetClientFrags(client);
+}
+
+static bool IsSimpleScrambleEligibleClass(int client)
+{
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return false;
+    }
+
+    TFClassType cls = TF2_GetPlayerClass(client);
+    return cls != TFClass_Engineer && cls != TFClass_Medic;
 }
 
 static bool SelectRandomPlayers(const int candidates[MAXPLAYERS + 1], int candidateCount, int selected[MAX_SWAP_BUFFER], int selectedCount)
