@@ -48,6 +48,7 @@ enum struct HatConfig
 	char id[64];
 	char name[64];
 	char prefix[128];
+	char bluPrefix[128];
 	char model[PLATFORM_MAX_PATH];
 	int quality;
 	int level;
@@ -1033,6 +1034,7 @@ void ResetHatConfig(HatConfig hat)
 	hat.id[0] = '\0';
 	hat.name[0] = '\0';
 	hat.prefix[0] = '\0';
+	hat.bluPrefix[0] = '\0';
 	hat.model[0] = '\0';
 	hat.quality = 6;
 	hat.level = 10;
@@ -1667,6 +1669,8 @@ void LoadConfig()
 				kv.GetString("name", hat.name, sizeof(hat.name), hatId);
 				kv.GetString("prefix", hat.prefix, sizeof(hat.prefix), "");
 				TrimString(hat.prefix);
+				kv.GetString("blu_prefix", hat.bluPrefix, sizeof(hat.bluPrefix), "");
+				TrimString(hat.bluPrefix);
 				kv.GetString("model", hat.model, sizeof(hat.model), DEFAULT_SCOUT_MODEL);
 				hat.enabled = (kv.GetNum("enabled", 1) != 0) && hat.model[0];
 				hat.baseDefIndex = kv.GetNum("defindex", 0);
@@ -1736,6 +1740,7 @@ void CreateDefaultConfig(const char[] path)
 	file.WriteLine("            \"style\" \"0\"");
 	file.WriteLine("            \"classes\" \"all\"");
 	file.WriteLine("            \"prefix\" \"\"");
+	file.WriteLine("            \"blu_prefix\" \"\"");
 	file.WriteLine("        }");
 	file.WriteLine("    }");
 	file.WriteLine("}");
@@ -1745,6 +1750,22 @@ void CreateDefaultConfig(const char[] path)
 bool IsValidClient(int client)
 {
 	return (client > 0 && client <= MaxClients && IsClientInGame(client));
+}
+
+static bool GetHatPrefixForClientTeam(int client, int hatIndex, char[] buffer, int maxlen)
+{
+	buffer[0] = '\0';
+
+	if (GetClientTeam(client) == view_as<int>(TFTeam_Blue) && g_Hats[hatIndex].bluPrefix[0])
+	{
+		strcopy(buffer, maxlen, g_Hats[hatIndex].bluPrefix);
+	}
+	else
+	{
+		strcopy(buffer, maxlen, g_Hats[hatIndex].prefix);
+	}
+
+	return buffer[0] != '\0';
 }
 
 static bool GetClientHatPrefix(int client, char[] buffer, int maxlen)
@@ -1769,12 +1790,11 @@ static bool GetClientHatPrefix(int client, char[] buffer, int maxlen)
 			continue;
 		}
 
-		if (!g_Hats[i].prefix[0])
+		if (!GetHatPrefixForClientTeam(client, i, buffer, maxlen))
 		{
 			return false;
 		}
 
-		strcopy(buffer, maxlen, g_Hats[i].prefix);
 		return true;
 	}
 
