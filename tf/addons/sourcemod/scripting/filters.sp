@@ -21,10 +21,7 @@
 #define PRENAME_MAX_PATTERN 64
 #define PRENAME_MAX_RENAME 64
 #define NAME_COLOR_AMERICA "america"
-#define NAME_COLOR_AMERICA_RED "americared"
-#define NAME_COLOR_AMERICA_WHITE "americawhite"
-#define NAME_COLOR_AMERICA_BLUE "americablue"
-#define NAME_PATTERN_AMERICA_PREVIEW "{americared}Ame{americawhite}ri{americablue}ca{default}"
+#define NAME_PATTERN_AMERICA_PREVIEW "{red}Ame{white}ri{royalblue}ca{default}"
 
 // Player state structure
 enum struct PlayerState
@@ -391,9 +388,6 @@ public void OnPluginStart()
         g_PrenameOutputMap = new StringMap();
     }
     BuildPath(Path_SM, g_PrenameDebugLogPath, sizeof(g_PrenameDebugLogPath), "logs/prename_migrate.log");
-    CAddColor(NAME_COLOR_AMERICA_RED, 0xB31942);
-    CAddColor(NAME_COLOR_AMERICA_WHITE, 0xFFFFFF);
-    CAddColor(NAME_COLOR_AMERICA_BLUE, 0x0A3161);
 
     LoadFilterConfig();
 
@@ -1789,9 +1783,9 @@ static void AppendAmericaColorTag(int segment, char[] output, int maxlen)
 {
     switch (segment)
     {
-        case 0: StrCat(output, maxlen, "{americared}");
-        case 1: StrCat(output, maxlen, "{americawhite}");
-        default: StrCat(output, maxlen, "{americablue}");
+        case 0: StrCat(output, maxlen, "{orangered}");
+        case 1: StrCat(output, maxlen, "{white}");
+        default: StrCat(output, maxlen, "{steelblue}");
     }
 }
 
@@ -3760,7 +3754,7 @@ public Action Command_Colors(int client, int args)
     CPrintToChat(client, "{rosybrown}rosybrown, {royalblue}royalblue, {saddlebrown}saddlebrown, {salmon}salmon, {sandybrown}sandybrown, {seagreen}seagreen, {seashell}seashell, {sienna}sienna, {silver}silver, {skyblue}skyblue");
     CPrintToChat(client, "{slateblue}slateblue, {slategray}slategray, {slategrey}slategrey, {snow}snow, {springgreen}springgreen, {steelblue}steelblue, {tan}tan, {teal}teal, {thistle}thistle, {tomato}tomato");
     CPrintToChat(client, "{turquoise}turquoise, {violet}violet, {wheat}wheat, {white}white, {whitesmoke}whitesmoke, {yellow}yellow, {yellowgreen}yellowgreen");
-    CPrintToChat(client, "{default}[Filters] Use !america for {americared}red{default}/{americawhite}white{default}/{americablue}blue{default} thirds.");
+    CPrintToChat(client, "{default}[Filters] Use !america for {orangered}red{default}/{white}white{default}/{steelblue}blue{default} thirds.");
 
     return Plugin_Handled;
 }
