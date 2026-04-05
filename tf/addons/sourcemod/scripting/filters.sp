@@ -21,7 +21,7 @@
 #define PRENAME_MAX_PATTERN 64
 #define PRENAME_MAX_RENAME 64
 #define NAME_COLOR_AMERICA "america"
-#define NAME_PATTERN_AMERICA_PREVIEW "{red}Ame{white}ri{royalblue}ca{default}"
+#define NAME_PATTERN_AMERICA_PREVIEW "{red}Ame{white}ri{dodgerblue}ca{default}"
 
 // Player state structure
 enum struct PlayerState
@@ -1783,9 +1783,9 @@ static void AppendAmericaColorTag(int segment, char[] output, int maxlen)
 {
     switch (segment)
     {
-        case 0: StrCat(output, maxlen, "{orangered}");
+        case 0: StrCat(output, maxlen, "{red}");
         case 1: StrCat(output, maxlen, "{white}");
-        default: StrCat(output, maxlen, "{steelblue}");
+        default: StrCat(output, maxlen, "{dodgerblue}");
     }
 }
 
