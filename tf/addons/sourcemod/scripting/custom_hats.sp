@@ -47,6 +47,7 @@ enum struct HatConfig
 	bool enabled;
 	char id[64];
 	char name[64];
+	char prefix[128];
 	char model[PLATFORM_MAX_PATH];
 	int quality;
 	int level;
@@ -133,6 +134,13 @@ public Plugin myinfo =
 	version = "1.0.0",
 	url = "https://kogasa.tf"
 };
+
+public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int err_max)
+{
+	RegPluginLibrary("custom_hats");
+	CreateNative("CustomHats_GetPrefix", Native_CustomHats_GetPrefix);
+	return APLRes_Success;
+}
 
 public void OnPluginStart()
 {
@@ -1024,6 +1032,7 @@ void ResetHatConfig(HatConfig hat)
 	hat.enabled = false;
 	hat.id[0] = '\0';
 	hat.name[0] = '\0';
+	hat.prefix[0] = '\0';
 	hat.model[0] = '\0';
 	hat.quality = 6;
 	hat.level = 10;
@@ -1656,6 +1665,8 @@ void LoadConfig()
 				ResetHatConfig(hat);
 				strcopy(hat.id, sizeof(hat.id), hatId);
 				kv.GetString("name", hat.name, sizeof(hat.name), hatId);
+				kv.GetString("prefix", hat.prefix, sizeof(hat.prefix), "");
+				TrimString(hat.prefix);
 				kv.GetString("model", hat.model, sizeof(hat.model), DEFAULT_SCOUT_MODEL);
 				hat.enabled = (kv.GetNum("enabled", 1) != 0) && hat.model[0];
 				hat.baseDefIndex = kv.GetNum("defindex", 0);
@@ -1724,6 +1735,7 @@ void CreateDefaultConfig(const char[] path)
 	file.WriteLine("            \"paint_index\" \"0\"");
 	file.WriteLine("            \"style\" \"0\"");
 	file.WriteLine("            \"classes\" \"all\"");
+	file.WriteLine("            \"prefix\" \"\"");
 	file.WriteLine("        }");
 	file.WriteLine("    }");
 	file.WriteLine("}");
@@ -1733,6 +1745,53 @@ void CreateDefaultConfig(const char[] path)
 bool IsValidClient(int client)
 {
 	return (client > 0 && client <= MaxClients && IsClientInGame(client));
+}
+
+static bool GetClientHatPrefix(int client, char[] buffer, int maxlen)
+{
+	buffer[0] = '\0';
+
+	if (!IsValidClient(client) || !HasClientEnabledHats(client))
+	{
+		return false;
+	}
+
+	TFClassType playerClass = TF2_GetPlayerClass(client);
+	if (playerClass == TFClass_Unknown)
+	{
+		return false;
+	}
+
+	for (int i = 0; i < g_iHatCount; i++)
+	{
+		if (!g_bHatEnabled[client][i] || !IsHatEnabled(i) || !IsClassAllowedForHat(i, playerClass))
+		{
+			continue;
+		}
+
+		if (!g_Hats[i].prefix[0])
+		{
+			return false;
+		}
+
+		strcopy(buffer, maxlen, g_Hats[i].prefix);
+		return true;
+	}
+
+	return false;
+}
+
+public any Native_CustomHats_GetPrefix(Handle plugin, int numParams)
+{
+	int client = GetNativeCell(1);
+	int maxlen = GetNativeCell(3);
+
+	char buffer[128];
+	buffer[0] = '\0';
+
+	bool found = GetClientHatPrefix(client, buffer, sizeof(buffer));
+	SetNativeString(2, buffer, maxlen, true);
+	return found;
 }
 
 void ApplyCustomModel(int entity, const char[] modelPath)

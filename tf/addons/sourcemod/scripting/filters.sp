@@ -48,6 +48,7 @@ native int Hugs_GetRapesGiven(int client);
 native bool Hugs_AreStatsLoaded(int client);
 native int WhaleTracker_GetCumulativeKills(int client);
 native bool WhaleTracker_AreStatsLoaded(int client);
+native bool CustomHats_GetPrefix(int client, char[] buffer, int maxlen);
 
 public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int err_max)
 {
@@ -58,6 +59,7 @@ public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int err_max)
     MarkNativeAsOptional("Hugs_AreStatsLoaded");
     MarkNativeAsOptional("WhaleTracker_GetCumulativeKills");
     MarkNativeAsOptional("WhaleTracker_AreStatsLoaded");
+    MarkNativeAsOptional("CustomHats_GetPrefix");
     return APLRes_Success;
 }
 
@@ -1158,11 +1160,11 @@ public Action OnClientSayCommand(int client, const char[] command, const char[] 
     char messageColorTag[16];
     BuildMessageColorTag(client, messageColorTag, sizeof(messageColorTag));
 
-    char renderedName[256];
-    BuildRenderedClientName(client, renderedName, sizeof(renderedName));
+    char displayName[384];
+    BuildChatDisplayName(client, displayName, sizeof(displayName));
 
     char output[256];
-    Format(output, sizeof(output), "%s%s%s%s : %s", messageColorTag, dead, renderedName, messageColorTag, sArgs);
+    Format(output, sizeof(output), "%s%s%s%s : %s", messageColorTag, dead, displayName, messageColorTag, sArgs);
 
     ApplyFiltersIfNeeded(output, sizeof(output), context);
 
@@ -1563,11 +1565,11 @@ bool TryHandleTeamChat(int client, const char[] command, const char[] sArgs, con
     char messageColorTag[16];
     BuildMessageColorTag(client, messageColorTag, sizeof(messageColorTag));
 
-    char renderedName[256];
-    BuildRenderedClientName(client, renderedName, sizeof(renderedName));
+    char displayName[384];
+    BuildChatDisplayName(client, displayName, sizeof(displayName));
 
     char output[256];
-    Format(output, sizeof(output), "%s%s%s %s%s : %s", messageColorTag, deadPrefix, tag, renderedName, messageColorTag, sArgs);
+    Format(output, sizeof(output), "%s%s%s %s%s : %s", messageColorTag, deadPrefix, tag, displayName, messageColorTag, sArgs);
     bool cordMode = GetConVarInt(g_sChatMode2) != 0;
     if (cordMode)
     {
@@ -1936,6 +1938,21 @@ static void BuildRenderedClientName(int client, char[] output, int maxlen)
     BuildColorOnlyClientName(client, output, maxlen);
 }
 
+static void BuildHatChatPrefix(int client, char[] output, int maxlen)
+{
+    output[0] = '\0';
+
+    if (GetFeatureStatus(FeatureType_Native, "CustomHats_GetPrefix") != FeatureStatus_Available)
+    {
+        return;
+    }
+
+    if (!CustomHats_GetPrefix(client, output, maxlen) || !output[0])
+    {
+        output[0] = '\0';
+    }
+}
+
 static void BuildColorOnlyClientName(int client, char[] output, int maxlen)
 {
     output[0] = '\0';
@@ -1951,6 +1968,25 @@ static void BuildColorOnlyClientName(int client, char[] output, int maxlen)
     char colorTag[40];
     BuildNameColorTag(client, colorTag, sizeof(colorTag));
     Format(output, maxlen, "%s%s{default}", colorTag, name);
+}
+
+static void BuildChatDisplayName(int client, char[] output, int maxlen)
+{
+    output[0] = '\0';
+
+    char hatPrefix[160];
+    BuildHatChatPrefix(client, hatPrefix, sizeof(hatPrefix));
+
+    char renderedName[256];
+    BuildRenderedClientName(client, renderedName, sizeof(renderedName));
+
+    if (hatPrefix[0])
+    {
+        Format(output, maxlen, "%s %s", hatPrefix, renderedName);
+        return;
+    }
+
+    strcopy(output, maxlen, renderedName);
 }
 
 static bool Filters_ShouldReceiveChat(int receiver, int sender)
@@ -2208,11 +2244,11 @@ bool HandleEnabledChat(int client, const char[] message, const ChatContext conte
 
 void SendFallbackMessage(int client)
 {
-    char renderedName[256];
-    BuildRenderedClientName(client, renderedName, sizeof(renderedName));
+    char displayName[384];
+    BuildChatDisplayName(client, displayName, sizeof(displayName));
 
     char output[256];
-    Format(output, sizeof(output), "%s: {gold}nigger", renderedName);
+    Format(output, sizeof(output), "%s: {gold}nigger", displayName);
     Filters_PrintToChatAllEx(client, output);
     Filters_LogChatMessage(client, output);
 }
