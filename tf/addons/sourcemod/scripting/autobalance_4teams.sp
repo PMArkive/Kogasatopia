@@ -59,7 +59,7 @@ public void OnPluginStart()
 {
     g_hLogEnabled = CreateConVar("sm_autobalance_log", "1", "Enable autobalance debug logging.", _, true, 0.0, true, 1.0);
     g_hDiffThreshold = CreateConVar("sm_autobalance_diff", "1", "Autobalance when team size difference is above this value.", _, true, 1.0, true, 10.0);
-    g_hSimpleSelection = CreateConVar("sm_autobalance_simple_selection", "1", "If enabled, autobalance picks the most recently joined dead non-Engineer on the oversized team.", _, true, 0.0, true, 1.0);
+    g_hSimpleSelection = CreateConVar("sm_autobalance_simple_selection", "1", "If enabled, autobalance prefers the most recently joined dead non-Engineer on the oversized team, then falls back to lower-priority eligible players by userID.", _, true, 0.0, true, 1.0);
     RegAdminCmd("sm_immune", Command_Immune, ADMFLAG_GENERIC, "sm_immune <name> - Make a player immune to autobalance for this map.");
     BuildPath(Path_SM, g_sLogPath, sizeof(g_sLogPath), "logs/autobalance.log");
     LogToFileEx(g_sLogPath, "[autobalance_4teams] Plugin started.");
@@ -253,12 +253,12 @@ public Action Timer_Autobalance(Handle timer)
 
     if (simpleSelection)
     {
-        pick = SelectRecentDeadNonEngineer(biggestTeam);
+        pick = SelectPreferredRecentPlayer(biggestTeam);
         candidateCount = (pick > 0) ? 1 : 0;
         if (pick <= 0)
         {
             LogBalance(
-                "Skip balance on %s: simple selection found no dead non-Engineer candidates (eligible=%d)",
+                "Skip balance on %s: simple selection found no eligible candidates (eligible=%d)",
                 fromTeamName, totalPlayers
             );
             return Plugin_Continue;
@@ -441,20 +441,38 @@ static bool IsEligiblePlayerForce(int client, int team)
     return true;
 }
 
-static int SelectRecentDeadNonEngineer(int team)
+static int GetSimpleSelectionPriority(int client)
+{
+    int priority = 0;
+
+    if (!IsPlayerAlive(client))
+    {
+        priority += 2;
+    }
+
+    if (TF2_GetPlayerClass(client) != TFClass_Engineer)
+    {
+        priority += 1;
+    }
+
+    return priority;
+}
+
+static int SelectPreferredRecentPlayer(int team)
 {
     int pick = 0;
+    int bestPriority = -1;
     int highestUserId = -1;
 
     for (int i = 1; i <= MaxClients; i++)
     {
         if (!IsClientInGame(i) || !IsEligiblePlayer(i, team)) continue;
-        if (IsPlayerAlive(i)) continue;
-        if (TF2_GetPlayerClass(i) == TFClass_Engineer) continue;
 
+        int priority = GetSimpleSelectionPriority(i);
         int currentUserId = GetClientUserId(i);
-        if (currentUserId > highestUserId)
+        if (priority > bestPriority || (priority == bestPriority && currentUserId > highestUserId))
         {
+            bestPriority = priority;
             highestUserId = currentUserId;
             pick = i;
         }
