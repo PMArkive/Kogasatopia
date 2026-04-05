@@ -24,6 +24,7 @@
 #define NAME_COLOR_AMERICA_RED "americared"
 #define NAME_COLOR_AMERICA_WHITE "americawhite"
 #define NAME_COLOR_AMERICA_BLUE "americablue"
+#define NAME_PATTERN_AMERICA_PREVIEW "{americared}Ame{americawhite}ri{americablue}ca{default}"
 
 // Player state structure
 enum struct PlayerState
@@ -70,8 +71,9 @@ Handle g_hCookieBlacklist;
 Handle g_hCookieredlist;
 Handle g_hChatFrontend;
 
-// Per-client name color tokens (empty string means team color)
+// Per-client name color and pattern preferences (empty string means unset)
 char g_NameColors[MAXPLAYERS + 1][32];
+char g_NamePatterns[MAXPLAYERS + 1][32];
 
 // Truthtext handles
 Handle g_sEnabled = INVALID_HANDLE;
@@ -466,6 +468,7 @@ public void OnPluginStart()
             g_PlayerState[i].isBlacklisted = false;
             g_PlayerState[i].isredlisted = false;
             g_NameColors[i][0] = '\0';
+            g_NamePatterns[i][0] = '\0';
         }
 
         Filters_ResetExternalStats(i);
@@ -587,7 +590,8 @@ public void T_Filters_SQLConnect(Database db, const char[] error, any data)
         "ALTER TABLE whaletracker_chat_outbox ADD COLUMN IF NOT EXISTS server_port INT NULL AFTER server_ip",
         "ALTER TABLE whaletracker_chat_outbox ADD COLUMN IF NOT EXISTS delivered_to TEXT NULL AFTER server_port",
         "CREATE TABLE IF NOT EXISTS prename_rules (pattern VARCHAR(64) PRIMARY KEY, newname VARCHAR(64) NOT NULL)",
-        "CREATE TABLE IF NOT EXISTS filters_namecolors (steamid VARCHAR(32) PRIMARY KEY, color VARCHAR(32) NOT NULL DEFAULT '', updated_at INT NOT NULL DEFAULT 0)"
+        "CREATE TABLE IF NOT EXISTS filters_namecolors (steamid VARCHAR(32) PRIMARY KEY, color VARCHAR(32) NOT NULL DEFAULT '', pattern VARCHAR(32) NOT NULL DEFAULT '', updated_at INT NOT NULL DEFAULT 0)",
+        "ALTER TABLE filters_namecolors ADD COLUMN IF NOT EXISTS pattern VARCHAR(32) NOT NULL DEFAULT '' AFTER color"
     };
 
     g_iPendingSchemaQueries = sizeof(schemaQueries);
@@ -636,7 +640,7 @@ public void Filters_SchemaQueryCallback(Database db, DBResultSet results, const 
         {
             if (IsClientInGame(i) && !IsFakeClient(i))
             {
-                LoadNameColorFromDb(i);
+                LoadNamePreferencesFromDb(i);
             }
         }
         if (!g_PrenameRulesLoaded)
@@ -1261,22 +1265,22 @@ bool HandleNameColorCommand(int client, const char[] sArgs)
 
     if (americaCommand)
     {
-        if (IsAmericaNameColor(g_NameColors[client]))
+        if (HasValidNamePattern(client))
         {
-            CPrintToChat(client, "{default}[Filters] Your name color is already {americared}A{americawhite}m{americablue}e{americared}r{americawhite}i{americablue}c{americared}a{default}.");
+            CPrintToChat(client, "{default}[Filters] Your name color is already %s.", NAME_PATTERN_AMERICA_PREVIEW);
             return true;
         }
 
-        SetNameColorPreference(client, NAME_COLOR_AMERICA);
-        CPrintToChat(client, "{default}[Filters] Your name color is now {americared}A{americawhite}m{americablue}e{americared}r{americawhite}i{americablue}c{americared}a{default}.");
+        SetNamePatternPreference(client, NAME_COLOR_AMERICA);
+        CPrintToChat(client, "{default}[Filters] Your name color is now %s.", NAME_PATTERN_AMERICA_PREVIEW);
         return true;
     }
 
     if (nextIndex == -1 || !buffer[nextIndex])
     {
-        if (IsAmericaNameColor(g_NameColors[client]))
+        if (HasValidNamePattern(client))
         {
-            CPrintToChat(client, "{default}[Filters] Your name color is currently {americared}A{americawhite}m{americablue}e{americared}r{americawhite}i{americablue}c{americared}a{default}. Use !name <color>, !america, or !name default.");
+            CPrintToChat(client, "{default}[Filters] Your name color is currently %s. Use !name <color>, !america, or !name default.", NAME_PATTERN_AMERICA_PREVIEW);
         }
         else if (g_NameColors[client][0] != '\0')
         {
@@ -1295,9 +1299,9 @@ bool HandleNameColorCommand(int client, const char[] sArgs)
 
     if (!colorName[0])
     {
-        if (IsAmericaNameColor(g_NameColors[client]))
+        if (HasValidNamePattern(client))
         {
-            CPrintToChat(client, "{default}[Filters] Your name color is currently {americared}A{americawhite}m{americablue}e{americared}r{americawhite}i{americablue}c{americared}a{default}. Use !name <color>, !america, or !name default.");
+            CPrintToChat(client, "{default}[Filters] Your name color is currently %s. Use !name <color>, !america, or !name default.", NAME_PATTERN_AMERICA_PREVIEW);
         }
         else if (g_NameColors[client][0] != '\0')
         {
@@ -1314,27 +1318,27 @@ bool HandleNameColorCommand(int client, const char[] sArgs)
 
     if (StrEqual(colorName, "default", false) || StrEqual(colorName, "team", false) || StrEqual(colorName, "teamcolor", false))
     {
-        if (!g_NameColors[client][0])
+        if (!g_NameColors[client][0] && !HasValidNamePattern(client))
         {
             CPrintToChat(client, "{default}[Filters] Your name color already uses the {teamcolor}team color{default}.");
             return true;
         }
 
-        ClearNameColorPreference(client);
+        ResetNamePreferences(client);
         CPrintToChat(client, "{default}[Filters] Your name color has been reset to the {teamcolor}team color{default}.");
         return true;
     }
 
-    if (IsAmericaNameColor(colorName))
+    if (IsAmericaNamePattern(colorName))
     {
-        if (IsAmericaNameColor(g_NameColors[client]))
+        if (HasValidNamePattern(client))
         {
-            CPrintToChat(client, "{default}[Filters] Your name color is already {americared}A{americawhite}m{americablue}e{americared}r{americawhite}i{americablue}c{americared}a{default}.");
+            CPrintToChat(client, "{default}[Filters] Your name color is already %s.", NAME_PATTERN_AMERICA_PREVIEW);
             return true;
         }
 
-        SetNameColorPreference(client, NAME_COLOR_AMERICA);
-        CPrintToChat(client, "{default}[Filters] Your name color is now {americared}A{americawhite}m{americablue}e{americared}r{americawhite}i{americablue}c{americared}a{default}.");
+        SetNamePatternPreference(client, NAME_COLOR_AMERICA);
+        CPrintToChat(client, "{default}[Filters] Your name color is now %s.", NAME_PATTERN_AMERICA_PREVIEW);
         return true;
     }
 
@@ -1683,11 +1687,7 @@ void ToLowercase(char[] text)
 
 void BuildNameColorTag(int client, char[] colorTag, int length)
 {
-    if (IsAmericaNameColor(g_NameColors[client]))
-    {
-        colorTag[0] = '\0';
-    }
-    else if (g_NameColors[client][0] != '\0')
+    if (g_NameColors[client][0] != '\0')
     {
         Format(colorTag, length, "{%s}", g_NameColors[client]);
     }
@@ -1717,21 +1717,52 @@ void BuildMessageColorTag(int client, char[] colorTag, int length)
     strcopy(colorTag, length, "{default}");
 }
 
-static bool IsAmericaNameColor(const char[] color)
+static bool IsAmericaNamePattern(const char[] pattern)
 {
-    return StrEqual(color, NAME_COLOR_AMERICA, false);
+    return StrEqual(pattern, NAME_COLOR_AMERICA, false);
+}
+
+static bool IsValidNamePattern(const char[] pattern)
+{
+    return IsAmericaNamePattern(pattern);
+}
+
+static bool HasValidNamePattern(int client)
+{
+    return IsValidNamePattern(g_NamePatterns[client]);
+}
+
+static bool GetActiveNamePattern(int client, char[] pattern, int maxlen)
+{
+    pattern[0] = '\0';
+
+    if (!HasValidNamePattern(client))
+    {
+        return false;
+    }
+
+    strcopy(pattern, maxlen, g_NamePatterns[client]);
+    return true;
 }
 
 static void SetNameColorPreference(int client, const char[] color)
 {
     strcopy(g_NameColors[client], sizeof(g_NameColors[]), color);
-    SaveNameColorToDb(client, color);
+    g_NamePatterns[client][0] = '\0';
+    SaveNamePreferencesToDb(client);
 }
 
-static void ClearNameColorPreference(int client)
+static void SetNamePatternPreference(int client, const char[] pattern)
 {
+    strcopy(g_NamePatterns[client], sizeof(g_NamePatterns[]), pattern);
+    SaveNamePreferencesToDb(client);
+}
+
+static void ResetNamePreferences(int client)
+{
+    g_NamePatterns[client][0] = '\0';
     g_NameColors[client][0] = '\0';
-    SaveNameColorToDb(client, "");
+    SaveNamePreferencesToDb(client);
 }
 
 static int CountUtf8Chars(const char[] text)
@@ -1824,6 +1855,69 @@ static void BuildAmericaName(const char[] name, char[] output, int maxlen)
     }
 
     StrCat(output, maxlen, "{default}");
+
+    /*
+    Alternating implementation kept for later reuse.
+
+    output[0] = '\0';
+
+    int charCount = CountUtf8Chars(name);
+    if (charCount <= 0)
+    {
+        strcopy(output, maxlen, "{default}");
+        return;
+    }
+
+    int firstBandEnd = (charCount + 2) / 3;
+    int currentColor = -1;
+    int charIndex = 0;
+    int byteIndex = 0;
+
+    while (name[byteIndex] != '\0')
+    {
+        int color = 1;
+        if (charIndex < firstBandEnd)
+        {
+            color = (charIndex % 2 == 0) ? 2 : 1;
+        }
+        else
+        {
+            int remainderIndex = charIndex - firstBandEnd;
+            color = (remainderIndex % 2 == 0) ? 0 : 1;
+        }
+
+        if (color != currentColor)
+        {
+            AppendAmericaColorTag(color, output, maxlen);
+            currentColor = color;
+        }
+
+        int charBytes = IsCharMB(name[byteIndex]);
+        if (charBytes <= 0)
+        {
+            charBytes = 1;
+        }
+
+        char glyph[8];
+        int copyLen = charBytes;
+        if (copyLen > sizeof(glyph) - 1)
+        {
+            copyLen = sizeof(glyph) - 1;
+        }
+
+        for (int i = 0; i < copyLen; i++)
+        {
+            glyph[i] = name[byteIndex + i];
+        }
+        glyph[copyLen] = '\0';
+        StrCat(output, maxlen, glyph);
+
+        byteIndex += charBytes;
+        charIndex++;
+    }
+
+    StrCat(output, maxlen, "{default}");
+    */
 }
 
 static void BuildRenderedClientName(int client, char[] output, int maxlen)
@@ -1838,11 +1932,27 @@ static void BuildRenderedClientName(int client, char[] output, int maxlen)
     char name[MAX_NAME_LENGTH];
     GetClientName(client, name, sizeof(name));
 
-    if (IsAmericaNameColor(g_NameColors[client]))
+    char pattern[32];
+    if (GetActiveNamePattern(client, pattern, sizeof(pattern)) && IsAmericaNamePattern(pattern))
     {
         BuildAmericaName(name, output, maxlen);
         return;
     }
+
+    BuildColorOnlyClientName(client, output, maxlen);
+}
+
+static void BuildColorOnlyClientName(int client, char[] output, int maxlen)
+{
+    output[0] = '\0';
+
+    if (client <= 0 || client > MaxClients || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    char name[MAX_NAME_LENGTH];
+    GetClientName(client, name, sizeof(name));
 
     char colorTag[40];
     BuildNameColorTag(client, colorTag, sizeof(colorTag));
@@ -2554,9 +2664,37 @@ void CreateDefaultConfig(const char[] path)
     LogMessage("Default config file created: %s", path);
 }
 
-void LoadNameColorFromDb(int client)
+void SaveNamePreferencesToDb(int client)
+{
+    if (!g_bDbReady || g_hFiltersDb == null || !IsClientInGame(client) || IsFakeClient(client))
+    {
+        return;
+    }
+
+    char steamId64[32];
+    if (!GetClientAuthId(client, AuthId_SteamID64, steamId64, sizeof(steamId64)))
+    {
+        return;
+    }
+
+    char escapedSteam[64];
+    char escapedColor[64];
+    char escapedPattern[64];
+    SQL_EscapeString(g_hFiltersDb, steamId64, escapedSteam, sizeof(escapedSteam));
+    SQL_EscapeString(g_hFiltersDb, g_NameColors[client], escapedColor, sizeof(escapedColor));
+    SQL_EscapeString(g_hFiltersDb, g_NamePatterns[client], escapedPattern, sizeof(escapedPattern));
+
+    char query[384];
+    Format(query, sizeof(query),
+        "REPLACE INTO filters_namecolors (steamid, color, pattern, updated_at) VALUES ('%s', '%s', '%s', %d)",
+        escapedSteam, escapedColor, escapedPattern, GetTime());
+    g_hFiltersDb.Query(Filters_SimpleSqlCallback, query);
+}
+
+void LoadNamePreferencesFromDb(int client)
 {
     g_NameColors[client][0] = '\0';
+    g_NamePatterns[client][0] = '\0';
 
     if (!g_bDbReady || g_hFiltersDb == null || !IsClientInGame(client) || IsFakeClient(client))
     {
@@ -2573,36 +2711,11 @@ void LoadNameColorFromDb(int client)
     SQL_EscapeString(g_hFiltersDb, steamId64, escapedSteam, sizeof(escapedSteam));
 
     char query[256];
-    Format(query, sizeof(query), "SELECT color FROM filters_namecolors WHERE steamid = '%s' LIMIT 1", escapedSteam);
-    g_hFiltersDb.Query(Filters_LoadNameColorCallback, query, GetClientUserId(client));
+    Format(query, sizeof(query), "SELECT color, pattern FROM filters_namecolors WHERE steamid = '%s' LIMIT 1", escapedSteam);
+    g_hFiltersDb.Query(Filters_LoadNamePreferencesCallback, query, GetClientUserId(client));
 }
 
-void SaveNameColorToDb(int client, const char[] color)
-{
-    if (!g_bDbReady || g_hFiltersDb == null || !IsClientInGame(client) || IsFakeClient(client))
-    {
-        return;
-    }
-
-    char steamId64[32];
-    if (!GetClientAuthId(client, AuthId_SteamID64, steamId64, sizeof(steamId64)))
-    {
-        return;
-    }
-
-    char escapedSteam[64];
-    char escapedColor[64];
-    SQL_EscapeString(g_hFiltersDb, steamId64, escapedSteam, sizeof(escapedSteam));
-    SQL_EscapeString(g_hFiltersDb, color, escapedColor, sizeof(escapedColor));
-
-    char query[320];
-    Format(query, sizeof(query),
-        "REPLACE INTO filters_namecolors (steamid, color, updated_at) VALUES ('%s', '%s', %d)",
-        escapedSteam, escapedColor, GetTime());
-    g_hFiltersDb.Query(Filters_SimpleSqlCallback, query);
-}
-
-public void Filters_LoadNameColorCallback(Database db, DBResultSet results, const char[] error, any userId)
+public void Filters_LoadNamePreferencesCallback(Database db, DBResultSet results, const char[] error, any userId)
 {
     int client = GetClientOfUserId(userId);
     if (client <= 0 || !IsClientInGame(client) || IsFakeClient(client))
@@ -2612,37 +2725,61 @@ public void Filters_LoadNameColorCallback(Database db, DBResultSet results, cons
 
     if (error[0] != '\0')
     {
-        LogError("[Filters] Failed to load name color: %s", error);
+        LogError("[Filters] Failed to load name preferences: %s", error);
         return;
     }
 
     if (results == null || !results.FetchRow())
     {
         g_NameColors[client][0] = '\0';
+        g_NamePatterns[client][0] = '\0';
         return;
     }
 
     char dbColor[32];
+    char dbPattern[32];
     results.FetchString(0, dbColor, sizeof(dbColor));
+    results.FetchString(1, dbPattern, sizeof(dbPattern));
     TrimString(dbColor);
+    TrimString(dbPattern);
     ToLowercase(dbColor);
+    ToLowercase(dbPattern);
 
-    if (!dbColor[0])
+    g_NameColors[client][0] = '\0';
+    g_NamePatterns[client][0] = '\0';
+
+    bool normalize = false;
+
+    if (dbColor[0])
     {
-        g_NameColors[client][0] = '\0';
-        return;
+        if (CColorExists(dbColor))
+        {
+            strcopy(g_NameColors[client], sizeof(g_NameColors[]), dbColor);
+        }
+        else
+        {
+            PrintToServer("[FILTERS] %N had invalid DB name color '%s', resetting to team color", client, dbColor);
+            normalize = true;
+        }
     }
 
-    if (!IsAmericaNameColor(dbColor) && !CColorExists(dbColor))
+    if (dbPattern[0])
     {
-        g_NameColors[client][0] = '\0';
-        PrintToServer("[FILTERS] %N had invalid DB name color '%s', resetting to team color", client, dbColor);
-        SaveNameColorToDb(client, "");
-        return;
+        if (IsValidNamePattern(dbPattern))
+        {
+            strcopy(g_NamePatterns[client], sizeof(g_NamePatterns[]), dbPattern);
+        }
+        else
+        {
+            PrintToServer("[FILTERS] %N had invalid DB name pattern '%s', clearing it", client, dbPattern);
+            normalize = true;
+        }
     }
 
-    strcopy(g_NameColors[client], sizeof(g_NameColors[]), dbColor);
-    PrintToServer("[FILTERS] %N loaded custom name color '%s' (db)", client, g_NameColors[client]);
+    if (normalize)
+    {
+        SaveNamePreferencesToDb(client);
+    }
 }
 
 // Process client cookies on connect/cache
@@ -2657,8 +2794,6 @@ void ProcessCookies(int client)
 
     char cookie[32];
 
-    LoadNameColorFromDb(client);
-    
     // Check if client has forced status from config
     char steamid[32];
     if (GetClientAuthId(client, AuthId_Steam2, steamid, sizeof(steamid)))
@@ -2908,7 +3043,7 @@ public void OnClientPostAdminCheck(int client)
     if (!IsFakeClient(client))
     {
         Filters_StartAutoRedlistCheck(client);
-        LoadNameColorFromDb(client);
+        LoadNamePreferencesFromDb(client);
     }
 
     Filters_UpdateExternalStats(client);
@@ -2922,7 +3057,7 @@ public void OnClientCookiesCached(int client)
     }
     Filters_UpdateVoiceOverrides();
     Filters_UpdateExternalStats(client);
-    LoadNameColorFromDb(client);
+    LoadNamePreferencesFromDb(client);
 }
 
 public void Filters_OnFilterModeChanged(ConVar convar, const char[] oldValue, const char[] newValue)
@@ -2953,6 +3088,7 @@ public void OnClientDisconnect(int client)
     g_PlayerState[client].isredlisted = false;
     g_PlayerState[client].cookiesProcessed = false;
     g_NameColors[client][0] = '\0';
+    g_NamePatterns[client][0] = '\0';
     Filters_ResetExternalStats(client);
     for (int i = 1; i <= MaxClients; i++)
     {
@@ -3009,7 +3145,7 @@ public any Native_Filters_GetChatName(Handle plugin, int numParams)
 
     if (client > 0 && client <= MaxClients && IsClientInGame(client))
     {
-        BuildRenderedClientName(client, buffer, sizeof(buffer));
+        BuildColorOnlyClientName(client, buffer, sizeof(buffer));
     }
 
     SetNativeString(2, buffer, maxlen, true);
