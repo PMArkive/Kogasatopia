@@ -20,6 +20,10 @@
 #define REDLIST_RAPES_THRESHOLD 1
 #define PRENAME_MAX_PATTERN 64
 #define PRENAME_MAX_RENAME 64
+#define NAME_COLOR_AMERICA "america"
+#define NAME_COLOR_AMERICA_RED "americared"
+#define NAME_COLOR_AMERICA_WHITE "americawhite"
+#define NAME_COLOR_AMERICA_BLUE "americablue"
 
 // Player state structure
 enum struct PlayerState
@@ -385,6 +389,9 @@ public void OnPluginStart()
         g_PrenameOutputMap = new StringMap();
     }
     BuildPath(Path_SM, g_PrenameDebugLogPath, sizeof(g_PrenameDebugLogPath), "logs/prename_migrate.log");
+    CAddColor(NAME_COLOR_AMERICA_RED, 0xB31942);
+    CAddColor(NAME_COLOR_AMERICA_WHITE, 0xFFFFFF);
+    CAddColor(NAME_COLOR_AMERICA_BLUE, 0x0A3161);
 
     LoadFilterConfig();
 
@@ -1150,14 +1157,14 @@ public Action OnClientSayCommand(int client, const char[] command, const char[] 
         LogBlacklistedMessage(client, sArgs, context.hasBlacklistedTerm, context.isBlacklisted);
     }
 
-    char nameColorTag[40];
-    BuildNameColorTag(client, nameColorTag, sizeof(nameColorTag));
-
     char messageColorTag[16];
     BuildMessageColorTag(client, messageColorTag, sizeof(messageColorTag));
 
+    char renderedName[256];
+    BuildRenderedClientName(client, renderedName, sizeof(renderedName));
+
     char output[256];
-    Format(output, sizeof(output), "%s%s%s%N%s : %s", messageColorTag, dead, nameColorTag, client, messageColorTag, sArgs);
+    Format(output, sizeof(output), "%s%s%s%s : %s", messageColorTag, dead, renderedName, messageColorTag, sArgs);
 
     ApplyFiltersIfNeeded(output, sizeof(output), context);
 
@@ -1241,21 +1248,43 @@ bool HandleNameColorCommand(int client, const char[] sArgs)
 
     char commandToken[16];
     int nextIndex = BreakString(buffer, commandToken, sizeof(commandToken));
+    bool americaCommand = StrEqual(commandToken, "!america", false) || StrEqual(commandToken, "/america", false);
 
-    if (!StrEqual(commandToken, "!name", false) && !StrEqual(commandToken, "/name", false) && !StrEqual(commandToken, "!color", false) && !StrEqual(commandToken, "/color", false))
+    if (!americaCommand
+        && !StrEqual(commandToken, "!name", false)
+        && !StrEqual(commandToken, "/name", false)
+        && !StrEqual(commandToken, "!color", false)
+        && !StrEqual(commandToken, "/color", false))
     {
         return false;
     }
 
+    if (americaCommand)
+    {
+        if (IsAmericaNameColor(g_NameColors[client]))
+        {
+            CPrintToChat(client, "{default}[Filters] Your name color is already {americared}A{americawhite}m{americablue}e{americared}r{americawhite}i{americablue}c{americared}a{default}.");
+            return true;
+        }
+
+        SetNameColorPreference(client, NAME_COLOR_AMERICA);
+        CPrintToChat(client, "{default}[Filters] Your name color is now {americared}A{americawhite}m{americablue}e{americared}r{americawhite}i{americablue}c{americared}a{default}.");
+        return true;
+    }
+
     if (nextIndex == -1 || !buffer[nextIndex])
     {
-        if (g_NameColors[client][0] != '\0')
+        if (IsAmericaNameColor(g_NameColors[client]))
         {
-            CPrintToChat(client, "{default}[Filters] Your name color is currently {%s}%s{default}. Use !name <color> or !name default.", g_NameColors[client], g_NameColors[client]);
+            CPrintToChat(client, "{default}[Filters] Your name color is currently {americared}A{americawhite}m{americablue}e{americared}r{americawhite}i{americablue}c{americared}a{default}. Use !name <color>, !america, or !name default.");
+        }
+        else if (g_NameColors[client][0] != '\0')
+        {
+            CPrintToChat(client, "{default}[Filters] Your name color is currently {%s}%s{default}. Use !name <color>, !america, or !name default.", g_NameColors[client], g_NameColors[client]);
         }
         else
         {
-            CPrintToChat(client, "{default}[Filters] Your name color uses the {teamcolor}team color{default}. Use !name <color> to change it.");
+            CPrintToChat(client, "{default}[Filters] Your name color uses the {teamcolor}team color{default}. Use !name <color> or !america to change it.");
         }
         return true;
     }
@@ -1266,13 +1295,17 @@ bool HandleNameColorCommand(int client, const char[] sArgs)
 
     if (!colorName[0])
     {
-        if (g_NameColors[client][0] != '\0')
+        if (IsAmericaNameColor(g_NameColors[client]))
         {
-            CPrintToChat(client, "{default}[Filters] Your name color is currently {%s}%s{default}. Use !name <color> or !name default.", g_NameColors[client], g_NameColors[client]);
+            CPrintToChat(client, "{default}[Filters] Your name color is currently {americared}A{americawhite}m{americablue}e{americared}r{americawhite}i{americablue}c{americared}a{default}. Use !name <color>, !america, or !name default.");
+        }
+        else if (g_NameColors[client][0] != '\0')
+        {
+            CPrintToChat(client, "{default}[Filters] Your name color is currently {%s}%s{default}. Use !name <color>, !america, or !name default.", g_NameColors[client], g_NameColors[client]);
         }
         else
         {
-            CPrintToChat(client, "{default}[Filters] Your name color uses the {teamcolor}team color{default}. Use !name <color> to change it.");
+            CPrintToChat(client, "{default}[Filters] Your name color uses the {teamcolor}team color{default}. Use !name <color> or !america to change it.");
         }
         return true;
     }
@@ -1287,15 +1320,27 @@ bool HandleNameColorCommand(int client, const char[] sArgs)
             return true;
         }
 
-        g_NameColors[client][0] = '\0';
-        SaveNameColorToDb(client, "");
+        ClearNameColorPreference(client);
         CPrintToChat(client, "{default}[Filters] Your name color has been reset to the {teamcolor}team color{default}.");
+        return true;
+    }
+
+    if (IsAmericaNameColor(colorName))
+    {
+        if (IsAmericaNameColor(g_NameColors[client]))
+        {
+            CPrintToChat(client, "{default}[Filters] Your name color is already {americared}A{americawhite}m{americablue}e{americared}r{americawhite}i{americablue}c{americared}a{default}.");
+            return true;
+        }
+
+        SetNameColorPreference(client, NAME_COLOR_AMERICA);
+        CPrintToChat(client, "{default}[Filters] Your name color is now {americared}A{americawhite}m{americablue}e{americared}r{americawhite}i{americablue}c{americared}a{default}.");
         return true;
     }
 
     if (!CColorExists(colorName))
     {
-        CPrintToChat(client, "{default}[Filters] Unknown color \"%s\". Example: !name deeppink", colorName);
+        CPrintToChat(client, "{default}[Filters] Unknown color \"%s\". Example: !name deeppink or !america", colorName);
         return true;
     }
 
@@ -1305,8 +1350,7 @@ bool HandleNameColorCommand(int client, const char[] sArgs)
         return true;
     }
 
-    strcopy(g_NameColors[client], sizeof(g_NameColors[]), colorName);
-    SaveNameColorToDb(client, colorName);
+    SetNameColorPreference(client, colorName);
 
     CPrintToChat(client, "{default}[Filters] Your name color is now {%s}%s{default}.", colorName, colorName);
     return true;
@@ -1518,14 +1562,14 @@ bool TryHandleTeamChat(int client, const char[] command, const char[] sArgs, con
     char tag[16];
     BuildTeamTag(GetClientTeam(client), tag, sizeof(tag));
 
-    char colorTag[40];
-    BuildNameColorTag(client, colorTag, sizeof(colorTag));
-
     char messageColorTag[16];
     BuildMessageColorTag(client, messageColorTag, sizeof(messageColorTag));
 
+    char renderedName[256];
+    BuildRenderedClientName(client, renderedName, sizeof(renderedName));
+
     char output[256];
-    Format(output, sizeof(output), "%s%s%s %s%N%s : %s", messageColorTag, deadPrefix, tag, colorTag, client, messageColorTag, sArgs);
+    Format(output, sizeof(output), "%s%s%s %s%s : %s", messageColorTag, deadPrefix, tag, renderedName, messageColorTag, sArgs);
     bool cordMode = GetConVarInt(g_sChatMode2) != 0;
     if (cordMode)
     {
@@ -1639,7 +1683,11 @@ void ToLowercase(char[] text)
 
 void BuildNameColorTag(int client, char[] colorTag, int length)
 {
-    if (g_NameColors[client][0] != '\0')
+    if (IsAmericaNameColor(g_NameColors[client]))
+    {
+        colorTag[0] = '\0';
+    }
+    else if (g_NameColors[client][0] != '\0')
     {
         Format(colorTag, length, "{%s}", g_NameColors[client]);
     }
@@ -1667,6 +1715,138 @@ void BuildMessageColorTag(int client, char[] colorTag, int length)
     }
 
     strcopy(colorTag, length, "{default}");
+}
+
+static bool IsAmericaNameColor(const char[] color)
+{
+    return StrEqual(color, NAME_COLOR_AMERICA, false);
+}
+
+static void SetNameColorPreference(int client, const char[] color)
+{
+    strcopy(g_NameColors[client], sizeof(g_NameColors[]), color);
+    SaveNameColorToDb(client, color);
+}
+
+static void ClearNameColorPreference(int client)
+{
+    g_NameColors[client][0] = '\0';
+    SaveNameColorToDb(client, "");
+}
+
+static int CountUtf8Chars(const char[] text)
+{
+    int count = 0;
+    int index = 0;
+
+    while (text[index] != '\0')
+    {
+        int charBytes = IsCharMB(text[index]);
+        if (charBytes <= 0)
+        {
+            charBytes = 1;
+        }
+
+        index += charBytes;
+        count++;
+    }
+
+    return count;
+}
+
+static void AppendAmericaColorTag(int segment, char[] output, int maxlen)
+{
+    switch (segment)
+    {
+        case 0: StrCat(output, maxlen, "{americared}");
+        case 1: StrCat(output, maxlen, "{americawhite}");
+        default: StrCat(output, maxlen, "{americablue}");
+    }
+}
+
+static void BuildAmericaName(const char[] name, char[] output, int maxlen)
+{
+    output[0] = '\0';
+
+    int charCount = CountUtf8Chars(name);
+    if (charCount <= 0)
+    {
+        strcopy(output, maxlen, "{default}");
+        return;
+    }
+
+    int redEnd = (charCount + 2) / 3;
+    int whiteEnd = (2 * charCount + 2) / 3;
+    int currentSegment = -1;
+    int charIndex = 0;
+    int byteIndex = 0;
+
+    while (name[byteIndex] != '\0')
+    {
+        int segment = 2;
+        if (charIndex < redEnd)
+        {
+            segment = 0;
+        }
+        else if (charIndex < whiteEnd)
+        {
+            segment = 1;
+        }
+
+        if (segment != currentSegment)
+        {
+            AppendAmericaColorTag(segment, output, maxlen);
+            currentSegment = segment;
+        }
+
+        int charBytes = IsCharMB(name[byteIndex]);
+        if (charBytes <= 0)
+        {
+            charBytes = 1;
+        }
+
+        char glyph[8];
+        int copyLen = charBytes;
+        if (copyLen > sizeof(glyph) - 1)
+        {
+            copyLen = sizeof(glyph) - 1;
+        }
+
+        for (int i = 0; i < copyLen; i++)
+        {
+            glyph[i] = name[byteIndex + i];
+        }
+        glyph[copyLen] = '\0';
+        StrCat(output, maxlen, glyph);
+
+        byteIndex += charBytes;
+        charIndex++;
+    }
+
+    StrCat(output, maxlen, "{default}");
+}
+
+static void BuildRenderedClientName(int client, char[] output, int maxlen)
+{
+    output[0] = '\0';
+
+    if (client <= 0 || client > MaxClients || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    char name[MAX_NAME_LENGTH];
+    GetClientName(client, name, sizeof(name));
+
+    if (IsAmericaNameColor(g_NameColors[client]))
+    {
+        BuildAmericaName(name, output, maxlen);
+        return;
+    }
+
+    char colorTag[40];
+    BuildNameColorTag(client, colorTag, sizeof(colorTag));
+    Format(output, maxlen, "%s%s{default}", colorTag, name);
 }
 
 static bool Filters_ShouldReceiveChat(int receiver, int sender)
@@ -1924,11 +2104,11 @@ bool HandleEnabledChat(int client, const char[] message, const ChatContext conte
 
 void SendFallbackMessage(int client)
 {
-    char colorTag[40];
-    BuildNameColorTag(client, colorTag, sizeof(colorTag));
+    char renderedName[256];
+    BuildRenderedClientName(client, renderedName, sizeof(renderedName));
 
     char output[256];
-    Format(output, sizeof(output), "%s%N{default}: {gold}nigger", colorTag, client);
+    Format(output, sizeof(output), "%s: {gold}nigger", renderedName);
     Filters_PrintToChatAllEx(client, output);
     Filters_LogChatMessage(client, output);
 }
@@ -2453,7 +2633,7 @@ public void Filters_LoadNameColorCallback(Database db, DBResultSet results, cons
         return;
     }
 
-    if (!CColorExists(dbColor))
+    if (!IsAmericaNameColor(dbColor) && !CColorExists(dbColor))
     {
         g_NameColors[client][0] = '\0';
         PrintToServer("[FILTERS] %N had invalid DB name color '%s', resetting to team color", client, dbColor);
@@ -2829,13 +3009,7 @@ public any Native_Filters_GetChatName(Handle plugin, int numParams)
 
     if (client > 0 && client <= MaxClients && IsClientInGame(client))
     {
-        char colorTag[32];
-        BuildNameColorTag(client, colorTag, sizeof(colorTag));
-
-        char name[MAX_NAME_LENGTH];
-        GetClientName(client, name, sizeof(name));
-
-        Format(buffer, sizeof(buffer), "%s%s{default}", colorTag, name);
+        BuildRenderedClientName(client, buffer, sizeof(buffer));
     }
 
     SetNativeString(2, buffer, maxlen, true);
@@ -3450,6 +3624,7 @@ public Action Command_Colors(int client, int args)
     CPrintToChat(client, "{rosybrown}rosybrown, {royalblue}royalblue, {saddlebrown}saddlebrown, {salmon}salmon, {sandybrown}sandybrown, {seagreen}seagreen, {seashell}seashell, {sienna}sienna, {silver}silver, {skyblue}skyblue");
     CPrintToChat(client, "{slateblue}slateblue, {slategray}slategray, {slategrey}slategrey, {snow}snow, {springgreen}springgreen, {steelblue}steelblue, {tan}tan, {teal}teal, {thistle}thistle, {tomato}tomato");
     CPrintToChat(client, "{turquoise}turquoise, {violet}violet, {wheat}wheat, {white}white, {whitesmoke}whitesmoke, {yellow}yellow, {yellowgreen}yellowgreen");
+    CPrintToChat(client, "{default}[Filters] Use !america for {americared}red{default}/{americawhite}white{default}/{americablue}blue{default} thirds.");
 
     return Plugin_Handled;
 }
