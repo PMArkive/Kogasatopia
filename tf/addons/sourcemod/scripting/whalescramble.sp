@@ -3,6 +3,7 @@
 #include <morecolors>
 #include <nativevotes>
 #include <tf2_stocks>
+#include <dhooks>
 
 #pragma semicolon 1
 #pragma newdecls required
@@ -36,6 +37,14 @@ bool g_bVoteAllowLowPop = false;
 bool scrambleCooldown = false;
 NativeVote g_hVote = null;
 Handle g_hScrambleCooldownTimer = null;
+GameData g_hWhaleScrambleGameData = null;
+DynamicHook g_hHandleScrambleTeamsHook = null;
+int g_iHandleScrambleTeamsHookId = INVALID_HOOK_ID;
+Handle g_hSetScrambleTeamsCall = null;
+bool g_bPluginScramblePending = false;
+int g_iPendingScrambleIssuerUserId = 0;
+bool g_bPendingScrambleBroadcastFailures = false;
+bool g_bPendingScrambleAllowLowPop = true;
 ConVar g_hLogEnabled = null;
 ConVar g_hAutoRounds = null;
 ConVar g_hVoteTime = null;
@@ -65,12 +74,15 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 {
     MarkNativeAsOptional("FilterAlerts_SuppressTeamAlertWindow");
     MarkNativeAsOptional("Filters_GetChatName");
+    MarkNativeAsOptional("DynamicHook.DynamicHook");
+    MarkNativeAsOptional("DynamicHook.HookGamerules");
     return APLRes_Success;
 }
 
 public void OnPluginStart()
 {
     UpdateNativeVotes();
+    InitHandleScrambleTeamsHook();
     g_hLogEnabled = CreateConVar("sm_whalescramble_log", "1", "Enable whalescramble debug logging.", _, true, 0.0, true, 1.0);
     BuildPath(Path_SM, g_sLogPath, sizeof(g_sLogPath), "logs/whalescramble.log");
     LogWhale("Plugin started.");
@@ -119,8 +131,10 @@ public void OnLibraryRemoved(const char[] name)
 
 public void OnMapStart()
 {
+    HookHandleScrambleTeamsGamerules();
     ResetVotes();
     ClearScrambleCooldown();
+    ClearPendingWhaleScramble();
     g_iRoundsSinceAuto = 0;
     if (g_hScrambleImmunity != null)
     {
@@ -131,16 +145,26 @@ public void OnMapStart()
 
 public void OnMapEnd()
 {
+    g_iHandleScrambleTeamsHookId = INVALID_HOOK_ID;
     ResetVotes();
     ClearScrambleCooldown();
+    ClearPendingWhaleScramble();
     g_iRoundsSinceAuto = 0;
     LogWhale("Map end: votes reset.");
 }
 
 public void OnPluginEnd()
 {
+    g_iHandleScrambleTeamsHookId = INVALID_HOOK_ID;
     ResetVotes();
     ClearScrambleCooldown();
+    ClearPendingWhaleScramble();
+    delete g_hHandleScrambleTeamsHook;
+    g_hHandleScrambleTeamsHook = null;
+    delete g_hSetScrambleTeamsCall;
+    g_hSetScrambleTeamsCall = null;
+    delete g_hWhaleScrambleGameData;
+    g_hWhaleScrambleGameData = null;
     LogWhale("Plugin ended.");
 }
 
@@ -174,7 +198,7 @@ public Action Command_Scramble(int client, int args)
 public Action Command_WhaleScramble(int client, int args)
 {
     LogWhale("Admin whale scramble requested by %N (%d).", client, GetClientUserId(client));
-    StartConfiguredWhaleScramble(client, true, true);
+    QueueWhaleScramble(client, true, true);
     return Plugin_Handled;
 }
 
@@ -393,10 +417,133 @@ static bool StartAutoScramble(bool suppressFeedback)
     }
 
     LogWhale("Auto scramble triggered.");
-    return StartConfiguredWhaleScramble(0, !suppressFeedback, false);
+    return QueueWhaleScramble(0, !suppressFeedback, false);
 }
 
-static bool StartConfiguredWhaleScramble(int issuer, bool broadcastFailures, bool allowLowPop)
+static void InitHandleScrambleTeamsHook()
+{
+    if (g_hWhaleScrambleGameData != null)
+    {
+        return;
+    }
+
+    if (GetFeatureStatus(FeatureType_Native, "DynamicHook.DynamicHook") != FeatureStatus_Available
+        || GetFeatureStatus(FeatureType_Native, "DynamicHook.HookGamerules") != FeatureStatus_Available)
+    {
+        LogWhale("DHooks unavailable; engine scramble interception disabled.");
+        return;
+    }
+
+    g_hWhaleScrambleGameData = LoadGameConfigFile("whalescramble");
+    if (g_hWhaleScrambleGameData == null)
+    {
+        LogWhale("Failed to load gamedata/whalescramble.txt; engine scramble interception disabled.");
+        return;
+    }
+
+    int offset = g_hWhaleScrambleGameData.GetOffset("CTeamplayRules::HandleScrambleTeams");
+    if (offset < 0)
+    {
+        LogWhale("Failed to load CTeamplayRules::HandleScrambleTeams offset from gamedata.");
+        return;
+    }
+
+    g_hHandleScrambleTeamsHook = new DynamicHook(offset, HookType_GameRules, ReturnType_Void, ThisPointer_Ignore);
+    if (g_hHandleScrambleTeamsHook == null)
+    {
+        LogWhale("Failed to create CTeamplayRules::HandleScrambleTeams hook.");
+        return;
+    }
+
+    StartPrepSDKCall(SDKCall_GameRules);
+    if (!PrepSDKCall_SetFromConf(g_hWhaleScrambleGameData, SDKConf_Virtual, "CTeamplayRules::SetScrambleTeams"))
+    {
+        LogWhale("Failed to prepare CTeamplayRules::SetScrambleTeams SDK call.");
+        return;
+    }
+    PrepSDKCall_AddParameter(SDKType_Bool, SDKPass_Plain);
+    g_hSetScrambleTeamsCall = EndPrepSDKCall();
+    if (g_hSetScrambleTeamsCall == null)
+    {
+        LogWhale("Failed to create CTeamplayRules::SetScrambleTeams SDK call.");
+        return;
+    }
+
+    HookHandleScrambleTeamsGamerules();
+}
+
+static void ClearPendingWhaleScramble()
+{
+    g_bPluginScramblePending = false;
+    g_iPendingScrambleIssuerUserId = 0;
+    g_bPendingScrambleBroadcastFailures = false;
+    g_bPendingScrambleAllowLowPop = true;
+}
+
+static bool QueueWhaleScramble(int issuer, bool broadcastFailures, bool allowLowPop)
+{
+    if (g_hSetScrambleTeamsCall == null || g_hHandleScrambleTeamsHook == null)
+    {
+        NotifyFailure(issuer, broadcastFailures, "Engine scramble hook is unavailable.");
+        LogWhale("Failed to queue whale scramble: hook/call unavailable.");
+        return false;
+    }
+
+    g_iRoundsSinceAuto = 0;
+    g_bPluginScramblePending = true;
+    g_iPendingScrambleIssuerUserId = (issuer > 0 && IsClientInGame(issuer)) ? GetClientUserId(issuer) : 0;
+    g_bPendingScrambleBroadcastFailures = broadcastFailures;
+    g_bPendingScrambleAllowLowPop = allowLowPop;
+
+    SDKCall(g_hSetScrambleTeamsCall, true);
+    LogWhale("Queued whale scramble for engine handling: issuer=%d allowLowPop=%d broadcastFailures=%d.", issuer, allowLowPop ? 1 : 0, broadcastFailures ? 1 : 0);
+    return true;
+}
+
+static void HookHandleScrambleTeamsGamerules()
+{
+    if (g_hHandleScrambleTeamsHook == null || g_iHandleScrambleTeamsHookId != INVALID_HOOK_ID)
+    {
+        return;
+    }
+
+    g_iHandleScrambleTeamsHookId = g_hHandleScrambleTeamsHook.HookGamerules(Hook_Pre, DHook_HandleScrambleTeams);
+    if (g_iHandleScrambleTeamsHookId == INVALID_HOOK_ID)
+    {
+        LogWhale("Failed to hook CTeamplayRules::HandleScrambleTeams on gamerules.");
+    }
+    else
+    {
+        LogWhale("Hooked CTeamplayRules::HandleScrambleTeams.");
+    }
+}
+
+public MRESReturn DHook_HandleScrambleTeams()
+{
+    LogWhale("Intercepted CTeamplayRules::HandleScrambleTeams.");
+
+    if (g_bPluginScramblePending)
+    {
+        int issuer = GetClientOfUserId(g_iPendingScrambleIssuerUserId);
+        bool started = Internal_HandleScramble(issuer, g_bPendingScrambleBroadcastFailures, g_bPendingScrambleAllowLowPop);
+        ClearPendingWhaleScramble();
+        if (!started)
+        {
+            LogWhale("Queued whale scramble failed during engine handling.");
+        }
+        return MRES_Supercede;
+    }
+
+    if (!Internal_HandleScramble(0, false, true))
+    {
+        LogWhale("Internal_HandleScramble returned false; allowing engine scramble.");
+        return MRES_Ignored;
+    }
+
+    return MRES_Supercede;
+}
+
+static bool Internal_HandleScramble(int issuer, bool broadcastFailures, bool allowLowPop)
 {
     if (g_hTopSwap != null && g_hTopSwap.BoolValue)
     {
@@ -467,7 +614,7 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
             }
             else
             {
-                bool started = StartConfiguredWhaleScramble(0, true, g_bVoteAllowLowPop);
+                bool started = QueueWhaleScramble(0, true, g_bVoteAllowLowPop);
                 if (started)
                 {
                     NativeVotes_DisplayPassCustom(vote, "Vote passed. Whale scrambling teams...");
