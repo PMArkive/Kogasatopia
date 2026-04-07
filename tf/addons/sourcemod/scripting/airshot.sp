@@ -6,6 +6,7 @@
 #include <tf2>
 #include <tf2_stocks>
 #include <morecolors>
+#include <whaletracker_api>
 #define HEADSHOT_SUPPRESS_WINDOW 0.5
 #define AIRSHOT_MIN_HEIGHT 50.0
 #define SOUND_AIRSHOT "misc/taps_02.wav"

@@ -22,7 +22,7 @@
 #define PRENAME_MAX_RENAME 64
 #define NAME_COLOR_AMERICA "america"
 #define NAME_PATTERN_AMERICA_PREVIEW "{red}Ame{white}ri{dodgerblue}ca{default}"
-#define MAX_NAME_TAG_LENGTH 160
+#define CHAT_PREFIX_MAXLEN 128
 
 // Player state structure
 enum struct PlayerState
@@ -49,7 +49,7 @@ native int Hugs_GetRapesGiven(int client);
 native bool Hugs_AreStatsLoaded(int client);
 native int WhaleTracker_GetCumulativeKills(int client);
 native bool WhaleTracker_AreStatsLoaded(int client);
-native bool CustomHats_GetPrefix(int client, char[] buffer, int maxlen);
+native bool Tags_GetTag(int client, const char[] steamid64, char[] buffer, int maxlen);
 
 public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int err_max)
 {
@@ -60,7 +60,7 @@ public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int err_max)
     MarkNativeAsOptional("Hugs_AreStatsLoaded");
     MarkNativeAsOptional("WhaleTracker_GetCumulativeKills");
     MarkNativeAsOptional("WhaleTracker_AreStatsLoaded");
-    MarkNativeAsOptional("CustomHats_GetPrefix");
+    MarkNativeAsOptional("Tags_GetTag");
     return APLRes_Success;
 }
 
@@ -71,10 +71,9 @@ Handle g_hCookieBlacklist;
 Handle g_hCookieredlist;
 Handle g_hChatFrontend;
 
-// Per-client name color, pattern, and chat tag preferences (empty string means unset)
+// Per-client name color and pattern preferences (empty string means unset)
 char g_NameColors[MAXPLAYERS + 1][32];
 char g_NamePatterns[MAXPLAYERS + 1][32];
-char g_NameTags[MAXPLAYERS + 1][MAX_NAME_TAG_LENGTH];
 
 // Truthtext handles
 Handle g_sEnabled = INVALID_HANDLE;
@@ -467,7 +466,6 @@ public void OnPluginStart()
             g_PlayerState[i].isredlisted = false;
             g_NameColors[i][0] = '\0';
             g_NamePatterns[i][0] = '\0';
-            g_NameTags[i][0] = '\0';
         }
 
         Filters_ResetExternalStats(i);
@@ -589,9 +587,8 @@ public void T_Filters_SQLConnect(Database db, const char[] error, any data)
         "ALTER TABLE whaletracker_chat_outbox ADD COLUMN IF NOT EXISTS server_port INT NULL AFTER server_ip",
         "ALTER TABLE whaletracker_chat_outbox ADD COLUMN IF NOT EXISTS delivered_to TEXT NULL AFTER server_port",
         "CREATE TABLE IF NOT EXISTS prename_rules (pattern VARCHAR(64) PRIMARY KEY, newname VARCHAR(64) NOT NULL)",
-        "CREATE TABLE IF NOT EXISTS filters_namecolors (steamid VARCHAR(32) PRIMARY KEY, color VARCHAR(32) NOT NULL DEFAULT '', pattern VARCHAR(32) NOT NULL DEFAULT '', tag VARCHAR(160) NOT NULL DEFAULT '', updated_at INT NOT NULL DEFAULT 0)",
-        "ALTER TABLE filters_namecolors ADD COLUMN IF NOT EXISTS pattern VARCHAR(32) NOT NULL DEFAULT '' AFTER color",
-        "ALTER TABLE filters_namecolors ADD COLUMN IF NOT EXISTS tag VARCHAR(160) NOT NULL DEFAULT '' AFTER pattern"
+        "CREATE TABLE IF NOT EXISTS filters_namecolors (steamid VARCHAR(32) PRIMARY KEY, color VARCHAR(32) NOT NULL DEFAULT '', pattern VARCHAR(32) NOT NULL DEFAULT '', updated_at INT NOT NULL DEFAULT 0)",
+        "ALTER TABLE filters_namecolors ADD COLUMN IF NOT EXISTS pattern VARCHAR(32) NOT NULL DEFAULT '' AFTER color"
     };
 
     g_iPendingSchemaQueries = sizeof(schemaQueries);
@@ -1127,11 +1124,6 @@ public Action OnClientSayCommand(int client, const char[] command, const char[] 
     char dead[64];
     BuildDeathPrefix(client, dead, sizeof(dead));
 
-    if (HandleNameTagCommand(client, sArgs))
-    {
-        return Plugin_Stop;
-    }
-
     if (HandleNameColorCommand(client, sArgs))
     {
         return Plugin_Stop;
@@ -1237,50 +1229,6 @@ void BuildDeathPrefix(int client, char[] deadPrefix, int length)
     }
 
     deadPrefix[0] = '\0';
-}
-
-bool HandleNameTagCommand(int client, const char[] sArgs)
-{
-    if (!sArgs[0])
-    {
-        return false;
-    }
-
-    char buffer[256];
-    strcopy(buffer, sizeof(buffer), sArgs);
-    TrimString(buffer);
-
-    if (!buffer[0])
-    {
-        return false;
-    }
-
-    char commandToken[16];
-    int nextIndex = BreakString(buffer, commandToken, sizeof(commandToken));
-    if (!StrEqual(commandToken, "!tag", false) && !StrEqual(commandToken, "/tag", false))
-    {
-        return false;
-    }
-
-    char tagValue[MAX_NAME_TAG_LENGTH];
-    tagValue[0] = '\0';
-
-    if (nextIndex != -1 && buffer[nextIndex])
-    {
-        strcopy(tagValue, sizeof(tagValue), buffer[nextIndex]);
-        TrimString(tagValue);
-    }
-
-    if (!tagValue[0] || StrEqual(tagValue, "reset", false) || StrEqual(tagValue, "none", false))
-    {
-        ClearNameTagPreference(client);
-        CPrintToChat(client, "{default}[Filters] Your chat tag has been cleared.");
-        return true;
-    }
-
-    SetNameTagPreference(client, tagValue);
-    CPrintToChat(client, "{default}[Filters] Your chat tag is now %s{default}.", tagValue);
-    return true;
 }
 
 bool HandleNameColorCommand(int client, const char[] sArgs)
@@ -1796,19 +1744,6 @@ static bool GetActiveNamePattern(int client, char[] pattern, int maxlen)
     return true;
 }
 
-static bool GetActiveNameTag(int client, char[] tag, int maxlen)
-{
-    tag[0] = '\0';
-
-    if (!g_NameTags[client][0])
-    {
-        return false;
-    }
-
-    strcopy(tag, maxlen, g_NameTags[client]);
-    return true;
-}
-
 static void SetNameColorPreference(int client, const char[] color)
 {
     strcopy(g_NameColors[client], sizeof(g_NameColors[]), color);
@@ -1825,18 +1760,6 @@ static void SetNamePatternPreference(int client, const char[] pattern)
 static void ClearNamePatternPreference(int client)
 {
     g_NamePatterns[client][0] = '\0';
-    SaveNamePreferencesToDb(client);
-}
-
-static void SetNameTagPreference(int client, const char[] tag)
-{
-    strcopy(g_NameTags[client], sizeof(g_NameTags[]), tag);
-    SaveNamePreferencesToDb(client);
-}
-
-static void ClearNameTagPreference(int client)
-{
-    g_NameTags[client][0] = '\0';
     SaveNamePreferencesToDb(client);
 }
 
@@ -2028,17 +1951,12 @@ static void BuildChatPrefix(int client, char[] output, int maxlen)
 {
     output[0] = '\0';
 
-    if (GetActiveNameTag(client, output, maxlen))
+    if (GetFeatureStatus(FeatureType_Native, "Tags_GetTag") != FeatureStatus_Available)
     {
         return;
     }
 
-    if (GetFeatureStatus(FeatureType_Native, "CustomHats_GetPrefix") != FeatureStatus_Available)
-    {
-        return;
-    }
-
-    if (!CustomHats_GetPrefix(client, output, maxlen) || !output[0])
+    if (!Tags_GetTag(client, "", output, maxlen) || !output[0])
     {
         output[0] = '\0';
     }
@@ -2065,7 +1983,7 @@ static void BuildChatDisplayName(int client, char[] output, int maxlen)
 {
     output[0] = '\0';
 
-    char chatPrefix[MAX_NAME_TAG_LENGTH];
+    char chatPrefix[CHAT_PREFIX_MAXLEN];
     BuildChatPrefix(client, chatPrefix, sizeof(chatPrefix));
 
     char renderedName[256];
@@ -2801,16 +2719,14 @@ void SaveNamePreferencesToDb(int client)
     char escapedSteam[64];
     char escapedColor[64];
     char escapedPattern[64];
-    char escapedTag[MAX_NAME_TAG_LENGTH * 2];
     SQL_EscapeString(g_hFiltersDb, steamId64, escapedSteam, sizeof(escapedSteam));
     SQL_EscapeString(g_hFiltersDb, g_NameColors[client], escapedColor, sizeof(escapedColor));
     SQL_EscapeString(g_hFiltersDb, g_NamePatterns[client], escapedPattern, sizeof(escapedPattern));
-    SQL_EscapeString(g_hFiltersDb, g_NameTags[client], escapedTag, sizeof(escapedTag));
 
-    char query[768];
+    char query[384];
     Format(query, sizeof(query),
-        "REPLACE INTO filters_namecolors (steamid, color, pattern, tag, updated_at) VALUES ('%s', '%s', '%s', '%s', %d)",
-        escapedSteam, escapedColor, escapedPattern, escapedTag, GetTime());
+        "REPLACE INTO filters_namecolors (steamid, color, pattern, updated_at) VALUES ('%s', '%s', '%s', %d)",
+        escapedSteam, escapedColor, escapedPattern, GetTime());
     g_hFiltersDb.Query(Filters_SimpleSqlCallback, query);
 }
 
@@ -2818,7 +2734,6 @@ void LoadNamePreferencesFromDb(int client)
 {
     g_NameColors[client][0] = '\0';
     g_NamePatterns[client][0] = '\0';
-    g_NameTags[client][0] = '\0';
 
     if (!g_bDbReady || g_hFiltersDb == null || !IsClientInGame(client) || IsFakeClient(client))
     {
@@ -2834,8 +2749,8 @@ void LoadNamePreferencesFromDb(int client)
     char escapedSteam[64];
     SQL_EscapeString(g_hFiltersDb, steamId64, escapedSteam, sizeof(escapedSteam));
 
-    char query[320];
-    Format(query, sizeof(query), "SELECT color, pattern, tag FROM filters_namecolors WHERE steamid = '%s' LIMIT 1", escapedSteam);
+    char query[256];
+    Format(query, sizeof(query), "SELECT color, pattern FROM filters_namecolors WHERE steamid = '%s' LIMIT 1", escapedSteam);
     g_hFiltersDb.Query(Filters_LoadNamePreferencesCallback, query, GetClientUserId(client));
 }
 
@@ -2857,25 +2772,20 @@ public void Filters_LoadNamePreferencesCallback(Database db, DBResultSet results
     {
         g_NameColors[client][0] = '\0';
         g_NamePatterns[client][0] = '\0';
-        g_NameTags[client][0] = '\0';
         return;
     }
 
     char dbColor[32];
     char dbPattern[32];
-    char dbTag[MAX_NAME_TAG_LENGTH];
     results.FetchString(0, dbColor, sizeof(dbColor));
     results.FetchString(1, dbPattern, sizeof(dbPattern));
-    results.FetchString(2, dbTag, sizeof(dbTag));
     TrimString(dbColor);
     TrimString(dbPattern);
-    TrimString(dbTag);
     ToLowercase(dbColor);
     ToLowercase(dbPattern);
 
     g_NameColors[client][0] = '\0';
     g_NamePatterns[client][0] = '\0';
-    g_NameTags[client][0] = '\0';
 
     bool normalize = false;
 
@@ -2903,11 +2813,6 @@ public void Filters_LoadNamePreferencesCallback(Database db, DBResultSet results
             PrintToServer("[FILTERS] %N had invalid DB name pattern '%s', clearing it", client, dbPattern);
             normalize = true;
         }
-    }
-
-    if (dbTag[0])
-    {
-        strcopy(g_NameTags[client], sizeof(g_NameTags[]), dbTag);
     }
 
     if (normalize)
@@ -3223,7 +3128,6 @@ public void OnClientDisconnect(int client)
     g_PlayerState[client].cookiesProcessed = false;
     g_NameColors[client][0] = '\0';
     g_NamePatterns[client][0] = '\0';
-    g_NameTags[client][0] = '\0';
     Filters_ResetExternalStats(client);
     for (int i = 1; i <= MaxClients; i++)
     {
@@ -3896,7 +3800,6 @@ public Action Command_Colors(int client, int args)
     CPrintToChat(client, "{slateblue}slateblue, {slategray}slategray, {slategrey}slategrey, {snow}snow, {springgreen}springgreen, {steelblue}steelblue, {tan}tan, {teal}teal, {thistle}thistle, {tomato}tomato");
     CPrintToChat(client, "{turquoise}turquoise, {violet}violet, {wheat}wheat, {white}white, {whitesmoke}whitesmoke, {yellow}yellow, {yellowgreen}yellowgreen");
     CPrintToChat(client, "{default}[Filters] Use !america for {orangered}red{default}/{white}white{default}/{steelblue}blue{default} thirds.");
-    CPrintToChat(client, "{default}[Filters] Use !tag <text> to set a chat tag. Use !tag, !tag none, or !tag reset to clear it.");
 
     return Plugin_Handled;
 }

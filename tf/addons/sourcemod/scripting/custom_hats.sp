@@ -1768,7 +1768,23 @@ static bool GetHatPrefixForClientTeam(int client, int hatIndex, char[] buffer, i
 	return buffer[0] != '\0';
 }
 
-static bool GetClientHatPrefix(int client, char[] buffer, int maxlen)
+static bool AppendJoinedPrefix(char[] buffer, int maxlen, const char[] prefix)
+{
+	if (!prefix[0])
+	{
+		return false;
+	}
+
+	if (buffer[0])
+	{
+		StrCat(buffer, maxlen, "|");
+	}
+
+	StrCat(buffer, maxlen, prefix);
+	return true;
+}
+
+static bool GetClientHatPrefixes(int client, char[] buffer, int maxlen)
 {
 	buffer[0] = '\0';
 
@@ -1783,6 +1799,7 @@ static bool GetClientHatPrefix(int client, char[] buffer, int maxlen)
 		return false;
 	}
 
+	bool found = false;
 	for (int i = 0; i < g_iHatCount; i++)
 	{
 		if (!g_bHatEnabled[client][i] || !IsHatEnabled(i) || !IsClassAllowedForHat(i, playerClass))
@@ -1790,15 +1807,17 @@ static bool GetClientHatPrefix(int client, char[] buffer, int maxlen)
 			continue;
 		}
 
-		if (!GetHatPrefixForClientTeam(client, i, buffer, maxlen))
+		char prefix[128];
+		if (!GetHatPrefixForClientTeam(client, i, prefix, sizeof(prefix)))
 		{
-			return false;
+			continue;
 		}
 
-		return true;
+		AppendJoinedPrefix(buffer, maxlen, prefix);
+		found = true;
 	}
 
-	return false;
+	return found;
 }
 
 public any Native_CustomHats_GetPrefix(Handle plugin, int numParams)
@@ -1806,10 +1825,10 @@ public any Native_CustomHats_GetPrefix(Handle plugin, int numParams)
 	int client = GetNativeCell(1);
 	int maxlen = GetNativeCell(3);
 
-	char buffer[128];
+	char buffer[4096];
 	buffer[0] = '\0';
 
-	bool found = GetClientHatPrefix(client, buffer, sizeof(buffer));
+	bool found = GetClientHatPrefixes(client, buffer, sizeof(buffer));
 	SetNativeString(2, buffer, maxlen, true);
 	return found;
 }
