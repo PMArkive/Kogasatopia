@@ -132,6 +132,7 @@ public void OnPluginStart()
     RegConsoleCmd("sm_clanjoin", Command_ClanJoin, "Join an open clan.");
     RegConsoleCmd("sm_clanparent", Command_ClanParent, "Set or clear your clan's parent relation.");
     RegConsoleCmd("sm_clanmembers", Command_ClanMembers, "Show clan members.");
+    RegConsoleCmd("sm_claninfo", Command_ClanInfo, "Show clan info.");
 
     /* Extra owner utility so open-clan menus are actually usable. */
     RegConsoleCmd("sm_clanopen", Command_ClanOpen, "Toggle whether your clan is open to direct joins.");
@@ -463,6 +464,36 @@ void ResolvePlayerDisplayName(const char[] steamid64, char[] buffer, int maxlen)
     }
 
     strcopy(buffer, maxlen, steamid64);
+}
+
+int FindClientByNameQuery(const char[] query)
+{
+    int partialClient = 0;
+    int partialCount = 0;
+
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        if (!IsClientInGame(client) || IsFakeClient(client))
+        {
+            continue;
+        }
+
+        char name[MAX_NAME_LENGTH];
+        GetClientName(client, name, sizeof(name));
+
+        if (StrEqual(name, query, false))
+        {
+            return client;
+        }
+
+        if (StrContains(name, query, false) != -1)
+        {
+            partialClient = client;
+            partialCount++;
+        }
+    }
+
+    return (partialCount == 1) ? partialClient : 0;
 }
 
 void EscapeSql(const char[] input, char[] output, int maxlen)
@@ -810,6 +841,25 @@ stock void GetClanById(int clanId, SQLQueryCallback callback, any data = 0)
     char query[256];
     FormatEx(query, sizeof(query),
         "SELECT id, name, tag, owner, is_open, created_at FROM clans WHERE id = %d LIMIT 1",
+        clanId);
+    g_Database.Query(callback, query, data);
+}
+
+void GetClanInfoById(int clanId, SQLQueryCallback callback, any data = 0)
+{
+    if (!EnsureDatabaseReady())
+    {
+        return;
+    }
+
+    char query[512];
+    FormatEx(query, sizeof(query),
+        "SELECT c.name, c.tag, c.owner, COUNT(cm.steamid64) "
+        ... "FROM clans c "
+        ... "LEFT JOIN clan_members cm ON cm.clan_id = c.id "
+        ... "WHERE c.id = %d "
+        ... "GROUP BY c.id, c.name, c.tag, c.owner "
+        ... "LIMIT 1",
         clanId);
     g_Database.Query(callback, query, data);
 }
@@ -1639,6 +1689,171 @@ public Action Command_ClanMembers(int client, int args)
 
     GetClanByPlayer(steamid64, SQL_OnClanMembersContext, GetClientUserId(client));
     return Plugin_Handled;
+}
+
+public Action Command_ClanInfo(int client, int args)
+{
+    if (client <= 0)
+    {
+        ReplyToCommand(client, "[Clans] This command can only be used by players.");
+        return Plugin_Handled;
+    }
+
+    if (!EnsureDatabaseReady(client))
+    {
+        return Plugin_Handled;
+    }
+
+    if (args < 1)
+    {
+        ReplyToCommand(client, "[Clans] Usage: sm_claninfo <player|clan name|clan tag|sub-tag>");
+        return Plugin_Handled;
+    }
+
+    char input[192];
+    GetCmdArgString(input, sizeof(input));
+    StripQuotes(input);
+    TrimString(input);
+
+    if (!input[0])
+    {
+        ReplyToCommand(client, "[Clans] Usage: sm_claninfo <player|clan name|clan tag|sub-tag>");
+        return Plugin_Handled;
+    }
+
+    int target = FindClientByNameQuery(input);
+    if (target > 0)
+    {
+        char steamid64[STEAMID64_MAXLEN];
+        if (!GetClientSteam64(target, steamid64, sizeof(steamid64)))
+        {
+            PrintToChat(client, "[Clans] Could not read that player's SteamID64.");
+            return Plugin_Handled;
+        }
+
+        GetClanByPlayer(steamid64, SQL_OnClanInfoPlayerLookup, GetClientUserId(client));
+        return Plugin_Handled;
+    }
+
+    char escapedInput[256];
+    char formattedTag[CLAN_TAG_STORE_MAXLEN];
+    char escapedFormatted[256];
+    EscapeSql(input, escapedInput, sizeof(escapedInput));
+    FormatStoredClanTag(input, formattedTag, sizeof(formattedTag));
+    EscapeSql(formattedTag, escapedFormatted, sizeof(escapedFormatted));
+
+    char query[1024];
+    FormatEx(query, sizeof(query),
+        "SELECT c.id "
+        ... "FROM clans c "
+        ... "LEFT JOIN clan_sub_tags cst ON cst.clan_id = c.id "
+        ... "WHERE LOWER(c.name) = LOWER('%s') "
+        ... "OR LOWER(c.tag) = LOWER('%s') "
+        ... "OR LOWER(c.tag) = LOWER('%s') "
+        ... "OR LOWER(cst.tag) = LOWER('%s') "
+        ... "ORDER BY CASE "
+        ... "WHEN LOWER(c.name) = LOWER('%s') THEN 0 "
+        ... "WHEN LOWER(c.tag) = LOWER('%s') THEN 1 "
+        ... "WHEN LOWER(c.tag) = LOWER('%s') THEN 2 "
+        ... "WHEN LOWER(cst.tag) = LOWER('%s') THEN 3 "
+        ... "ELSE 4 END, c.id ASC "
+        ... "LIMIT 1",
+        escapedInput,
+        escapedInput,
+        escapedFormatted,
+        escapedInput,
+        escapedInput,
+        escapedInput,
+        escapedFormatted,
+        escapedInput);
+
+    g_Database.Query(SQL_OnClanInfoSearchLookup, query, GetClientUserId(client));
+    return Plugin_Handled;
+}
+
+public void SQL_OnClanInfoPlayerLookup(Database db, DBResultSet results, const char[] error, any data)
+{
+    int client = GetClientOfUserId(data);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Clan info player lookup failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to load clan info.");
+        return;
+    }
+
+    if (results == null || !results.FetchRow())
+    {
+        PrintToChat(client, "[Clans] That player is not in a clan.");
+        return;
+    }
+
+    GetClanInfoById(results.FetchInt(ClanByPlayerCol_Id), SQL_OnClanInfoById, GetClientUserId(client));
+}
+
+public void SQL_OnClanInfoSearchLookup(Database db, DBResultSet results, const char[] error, any data)
+{
+    int client = GetClientOfUserId(data);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Clan info search lookup failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to load clan info.");
+        return;
+    }
+
+    if (results == null || !results.FetchRow())
+    {
+        PrintToChat(client, "[Clans] No clan matched that query.");
+        return;
+    }
+
+    GetClanInfoById(results.FetchInt(0), SQL_OnClanInfoById, GetClientUserId(client));
+}
+
+public void SQL_OnClanInfoById(Database db, DBResultSet results, const char[] error, any data)
+{
+    int client = GetClientOfUserId(data);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Clan info query failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to load clan info.");
+        return;
+    }
+
+    if (results == null || !results.FetchRow())
+    {
+        PrintToChat(client, "[Clans] Clan not found.");
+        return;
+    }
+
+    char clanName[CLAN_NAME_MAXLEN + 1];
+    char clanTag[CLAN_TAG_STORE_MAXLEN];
+    char ownerSteam[STEAMID64_MAXLEN];
+    char ownerName[MAX_NAME_LENGTH * 2];
+
+    results.FetchString(0, clanName, sizeof(clanName));
+    results.FetchString(1, clanTag, sizeof(clanTag));
+    results.FetchString(2, ownerSteam, sizeof(ownerSteam));
+    ResolvePlayerDisplayName(ownerSteam, ownerName, sizeof(ownerName));
+
+    CPrintToChat(client, "{default}[Clans] %s", clanName);
+    CPrintToChat(client, "{default}[Clans] Owner: %s", ownerName);
+    CPrintToChat(client, "{default}[Clans] Clan tag: %s", clanTag[0] ? clanTag : "(none)");
+    CPrintToChat(client, "{default}[Clans] Member count: %d", results.FetchInt(3));
 }
 
 public void SQL_OnClanMembersContext(Database db, DBResultSet results, const char[] error, any data)
