@@ -6,12 +6,13 @@
 #include <tf2>
 #include <tf2_stocks>
 #include <morecolors>
+#include <saysounds>
 #include <whaletracker_api>
 #define HEADSHOT_SUPPRESS_WINDOW 0.5
 #define AIRSHOT_MIN_HEIGHT 50.0
 #define SOUND_AIRSHOT "misc/taps_02.wav"
 #define SOUND_AIRSHOT_DOWNLOAD "sound/misc/taps_02.wav"
-native void SaySounds_PlaySoundToOptedIn(const char[] soundPath, const char[] groupName);
+#define SAYSOUND_AIRSHOT_COMMAND "airshot"
 bool g_bSaySoundsAvailable = false;
 Cookie g_hNameColorCookie = null;
 int g_iPendingAirshotAttacker[MAXPLAYERS + 1];
@@ -29,12 +30,6 @@ public void OnPluginStart()
 	HookEvent("player_death", Event_PlayerDeath, EventHookMode_Post);
 	g_bSaySoundsAvailable = LibraryExists("saysounds");
 	g_hNameColorCookie = FindClientCookie("filter_namecolor");
-}
-
-public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int errlen)
-{
-	MarkNativeAsOptional("SaySounds_PlaySoundToOptedIn");
-	return APLRes_Success;
 }
 
 public void OnLibraryAdded(const char[] name)
@@ -103,7 +98,7 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
 	CPrintToChatAll("%s%N{default} headshot %s%N{default} while in the air!", attackerColorTag, attacker, victimColorTag, victim);
 	if (g_bSaySoundsAvailable)
 	{
-		SaySounds_PlaySoundToOptedIn(SOUND_AIRSHOT, "all");
+		SaySounds_PlayCommand(0, SAYSOUND_AIRSHOT_COMMAND);
 	}
 	else
 	{
@@ -153,7 +148,7 @@ public Action Timer_BroadcastAirshot(Handle timer, any userid)
 	{
 		if (g_bSaySoundsAvailable)
 		{
-			SaySounds_PlaySoundToOptedIn(SOUND_AIRSHOT, "all");
+			SaySounds_PlayCommand(0, SAYSOUND_AIRSHOT_COMMAND);
 		}
 		else
 		{
