@@ -1742,21 +1742,27 @@ public Action Command_ClanInfo(int client, int args)
     FormatStoredClanTag(input, formattedTag, sizeof(formattedTag));
     EscapeSql(formattedTag, escapedFormatted, sizeof(escapedFormatted));
 
-    char query[1024];
+    char query[1400];
     FormatEx(query, sizeof(query),
-        "SELECT c.id "
+        "SELECT DISTINCT c.id "
         ... "FROM clans c "
         ... "LEFT JOIN clan_sub_tags cst ON cst.clan_id = c.id "
         ... "WHERE LOWER(c.name) = LOWER('%s') "
         ... "OR LOWER(c.tag) = LOWER('%s') "
         ... "OR LOWER(c.tag) = LOWER('%s') "
         ... "OR LOWER(cst.tag) = LOWER('%s') "
+        ... "OR LOWER(c.name) LIKE LOWER('%%%s%%') "
+        ... "OR LOWER(c.tag) LIKE LOWER('%%%s%%') "
+        ... "OR LOWER(cst.tag) LIKE LOWER('%%%s%%') "
         ... "ORDER BY CASE "
         ... "WHEN LOWER(c.name) = LOWER('%s') THEN 0 "
         ... "WHEN LOWER(c.tag) = LOWER('%s') THEN 1 "
         ... "WHEN LOWER(c.tag) = LOWER('%s') THEN 2 "
         ... "WHEN LOWER(cst.tag) = LOWER('%s') THEN 3 "
-        ... "ELSE 4 END, c.id ASC "
+        ... "WHEN LOWER(c.name) LIKE LOWER('%%%s%%') THEN 4 "
+        ... "WHEN LOWER(c.tag) LIKE LOWER('%%%s%%') THEN 5 "
+        ... "WHEN LOWER(cst.tag) LIKE LOWER('%%%s%%') THEN 6 "
+        ... "ELSE 7 END, c.id ASC "
         ... "LIMIT 1",
         escapedInput,
         escapedInput,
@@ -1765,6 +1771,11 @@ public Action Command_ClanInfo(int client, int args)
         escapedInput,
         escapedInput,
         escapedFormatted,
+        escapedInput,
+        escapedInput,
+        escapedInput,
+        escapedInput,
+        escapedInput,
         escapedInput);
 
     g_Database.Query(SQL_OnClanInfoSearchLookup, query, GetClientUserId(client));
