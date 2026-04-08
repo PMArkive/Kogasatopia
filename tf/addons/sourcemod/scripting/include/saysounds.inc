@@ -28,9 +28,10 @@ native void SaySounds_PlaySoundToOptedIn(const char[] soundPath, const char[] gr
  *
  * @param client        Client index, or `0` for broadcast.
  * @param commandName   Configured say sound command, such as `xp_gain`.
+ * @param force         If true, bypasses say sound opt-in checks.
  * @return              True if the sound resolved and was emitted to at least one client.
  */
-native bool SaySounds_PlayCommand(int client, const char[] commandName);
+native bool SaySounds_PlayCommand(int client, const char[] commandName, bool force = false);
 
 public SharedPlugin __pl_saysounds =
 {

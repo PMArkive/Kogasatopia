@@ -759,6 +759,12 @@ public int Native_PlayCommand(Handle plugin, int numParams)
         return 0;
     }
 
+    bool forcePlayback = false;
+    if (numParams >= 3)
+    {
+        forcePlayback = view_as<bool>(GetNativeCell(3));
+    }
+
     char commandName[MAX_COMMAND_NAME * 4];
     GetNativeString(2, commandName, sizeof(commandName));
     TrimString(commandName);
@@ -777,7 +783,7 @@ public int Native_PlayCommand(Handle plugin, int numParams)
     }
 
     PrecacheSound(soundPath, true);
-    return PlaySaySoundToTarget(client, soundPath, groupName);
+    return PlaySaySoundToTarget(client, soundPath, groupName, forcePlayback);
 }
 
 public Action Command_SetVolume(int client, int args)
@@ -1270,14 +1276,14 @@ static bool ClientMatchesGroup(int client, const char[] groupName)
     return StrEqual(g_szClientGroup[client], groupName);
 }
 
-static bool CanPlaySaySoundToClient(int client, const char[] groupName, float &emitVolume)
+static bool CanPlaySaySoundToClient(int client, const char[] groupName, float &emitVolume, bool forcePlayback = false)
 {
     if (client <= 0 || client > MaxClients || !IsClientInGame(client))
     {
         return false;
     }
 
-    if (g_hForce != null && g_hForce.BoolValue)
+    if (forcePlayback || (g_hForce != null && g_hForce.BoolValue))
     {
         emitVolume = 1.0;
         return true;
@@ -1297,7 +1303,7 @@ static bool CanPlaySaySoundToClient(int client, const char[] groupName, float &e
     return true;
 }
 
-static bool PlaySaySoundToTarget(int client, const char[] soundPath, const char[] groupName)
+static bool PlaySaySoundToTarget(int client, const char[] soundPath, const char[] groupName, bool forcePlayback = false)
 {
     bool played = false;
 
@@ -1306,7 +1312,7 @@ static bool PlaySaySoundToTarget(int client, const char[] soundPath, const char[
         for (int i = 1; i <= MaxClients; i++)
         {
             float emitVolume;
-            if (!CanPlaySaySoundToClient(i, groupName, emitVolume))
+            if (!CanPlaySaySoundToClient(i, groupName, emitVolume, forcePlayback))
             {
                 continue;
             }
@@ -1319,7 +1325,7 @@ static bool PlaySaySoundToTarget(int client, const char[] soundPath, const char[
     }
 
     float emitVolume;
-    if (!CanPlaySaySoundToClient(client, groupName, emitVolume))
+    if (!CanPlaySaySoundToClient(client, groupName, emitVolume, forcePlayback))
     {
         return false;
     }
