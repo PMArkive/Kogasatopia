@@ -13,11 +13,13 @@
 #define CLAN_CREATE_COST          100
 #define INVITE_EXPIRE_SECONDS     604800
 #define CLAN_NAME_MAXLEN          64
+#define CLAN_DESC_MAXLEN          128
 #define CLAN_TAG_MAXLEN           64
 #define CLAN_TAG_STORE_MAXLEN     (CLAN_TAG_MAXLEN + 1)
 #define STEAMID64_MAXLEN          32
 #define SQL_STEAMID64_MAXLEN      ((STEAMID64_MAXLEN * 2) + 1)
 #define SQL_CLAN_NAME_MAXLEN      ((CLAN_NAME_MAXLEN * 2) + 1)
+#define SQL_CLAN_DESC_MAXLEN      ((CLAN_DESC_MAXLEN * 2) + 1)
 #define SQL_CLAN_TAG_MAXLEN       ((CLAN_TAG_MAXLEN * 2) + 1)
 #define CLAN_SUB_TAG_MAXLEN       64
 #define CLAN_SUB_TAG_STORE_MAXLEN (CLAN_SUB_TAG_MAXLEN + 1)
@@ -42,7 +44,9 @@ enum PromptState
     Prompt_ClanLeaveConfirm,
     Prompt_ClanTagChoice,
     Prompt_ClanTagInput,
-    Prompt_ClanSubTagInput
+    Prompt_ClanSubTagInput,
+    Prompt_ClanDescInput,
+    Prompt_ClanAdminDescInput
 };
 
 enum InviteMenuMode
@@ -116,6 +120,8 @@ ConVar g_cvDatabaseConfig = null;
 Handle g_hInviteCleanupTimer = null;
 
 PromptState g_PromptState[MAXPLAYERS + 1];
+int g_PendingAdminClanDescId[MAXPLAYERS + 1];
+char g_PendingAdminClanDescName[MAXPLAYERS + 1][CLAN_NAME_MAXLEN + 1];
 
 public void OnPluginStart()
 {
@@ -133,6 +139,9 @@ public void OnPluginStart()
     RegConsoleCmd("sm_clanparent", Command_ClanParent, "Set or clear your clan's parent relation.");
     RegConsoleCmd("sm_clanmembers", Command_ClanMembers, "Show clan members.");
     RegConsoleCmd("sm_claninfo", Command_ClanInfo, "Show clan info.");
+    RegConsoleCmd("sm_claninvites", Command_ClanInvites, "Show pending clan invites.");
+    RegConsoleCmd("sm_clandesc", Command_ClanDesc, "Set your clan description.");
+    RegAdminCmd("sm_clansetdesc", Command_ClanSetDesc, ADMFLAG_GENERIC, "Set any clan description.");
 
     /* Extra owner utility so open-clan menus are actually usable. */
     RegConsoleCmd("sm_clanopen", Command_ClanOpen, "Toggle whether your clan is open to direct joins.");
@@ -171,6 +180,8 @@ public void OnClientDisconnect(int client)
 void ResetClientState(int client)
 {
     g_PromptState[client] = Prompt_None;
+    g_PendingAdminClanDescId[client] = 0;
+    g_PendingAdminClanDescName[client][0] = '\0';
 }
 
 void ConnectDatabase()
@@ -235,8 +246,11 @@ public void SQL_OnSchemaStepComplete(Database db, DBResultSet results, const cha
 {
     if (error[0])
     {
-        LogError("[Clans] Schema creation failed on step %d: %s", data, error);
-        return;
+        if (StrContains(error, "Duplicate column", false) == -1 && StrContains(error, "duplicate column name", false) == -1)
+        {
+            LogError("[Clans] Schema creation failed on step %d: %s", data, error);
+            return;
+        }
     }
 
     CreateSchemaStep(data + 1);
@@ -256,6 +270,7 @@ bool BuildSchemaQuery(int step, char[] query, int maxlen)
                     "CREATE TABLE IF NOT EXISTS clans ("
                     ... "id INT NOT NULL AUTO_INCREMENT, "
                     ... "name VARCHAR(64) NULL UNIQUE, "
+                    ... "`desc` VARCHAR(128) NOT NULL DEFAULT '', "
                     ... "tag VARCHAR(64) NULL, "
                     ... "owner BIGINT UNSIGNED NOT NULL, "
                     ... "is_open TINYINT(1) NOT NULL DEFAULT 0, "
@@ -269,6 +284,7 @@ bool BuildSchemaQuery(int step, char[] query, int maxlen)
                     "CREATE TABLE IF NOT EXISTS clans ("
                     ... "id INTEGER PRIMARY KEY AUTOINCREMENT, "
                     ... "name VARCHAR(64) UNIQUE NULL, "
+                    ... "`desc` VARCHAR(128) NOT NULL DEFAULT '', "
                     ... "tag VARCHAR(64) NULL, "
                     ... "owner BIGINT UNSIGNED NOT NULL, "
                     ... "is_open TINYINT(1) NOT NULL DEFAULT 0, "
@@ -382,6 +398,12 @@ bool BuildSchemaQuery(int step, char[] query, int maxlen)
                     ... "UNIQUE (steamid64)"
                     ... ")");
             }
+            return true;
+        }
+        case 5:
+        {
+            FormatEx(query, maxlen,
+                "ALTER TABLE clans ADD COLUMN `desc` VARCHAR(128) NOT NULL DEFAULT ''");
             return true;
         }
     }
@@ -852,13 +874,18 @@ void GetClanInfoById(int clanId, SQLQueryCallback callback, any data = 0)
         return;
     }
 
-    char query[512];
+    char query[1024];
     FormatEx(query, sizeof(query),
-        "SELECT c.name, c.tag, c.owner, COUNT(cm.steamid64) "
+        "SELECT c.name, c.tag, c.owner, COALESCE(c.`desc`, ''), ("
+        ... "SELECT COUNT(1) FROM clan_members cm WHERE cm.clan_id = c.id"
+        ... ") + ("
+        ... "SELECT COUNT(1) "
+        ... "FROM clan_members cm_child "
+        ... "INNER JOIN clan_relations cr ON cr.clan_id_a = cm_child.clan_id "
+        ... "WHERE cr.relation_type = 3 AND cr.clan_id_b = c.id"
+        ... ") AS member_count "
         ... "FROM clans c "
-        ... "LEFT JOIN clan_members cm ON cm.clan_id = c.id "
         ... "WHERE c.id = %d "
-        ... "GROUP BY c.id, c.name, c.tag, c.owner "
         ... "LIMIT 1",
         clanId);
     g_Database.Query(callback, query, data);
@@ -1146,6 +1173,24 @@ void SetClanTag(int clanId, const char[] tag, SQLQueryCallback callback, any dat
     g_Database.Query(callback, query, data);
 }
 
+void SetClanDescription(int clanId, const char[] description, SQLQueryCallback callback, any data = 0)
+{
+    if (!EnsureDatabaseReady())
+    {
+        return;
+    }
+
+    char escapedDescription[SQL_CLAN_DESC_MAXLEN];
+    EscapeSql(description, escapedDescription, sizeof(escapedDescription));
+
+    char query[512];
+    FormatEx(query, sizeof(query),
+        "UPDATE clans SET `desc` = '%s' WHERE id = %d",
+        escapedDescription,
+        clanId);
+    g_Database.Query(callback, query, data);
+}
+
 void SetClanSubTag(int clanId, const char[] steamid64, const char[] tag, SQLQueryCallback callback, any data = 0)
 {
     if (!EnsureDatabaseReady())
@@ -1388,6 +1433,32 @@ public Action CommandListener_Say(int client, const char[] command, int argc)
         StartSetClanSubTagFromInput(client, text);
         return Plugin_Handled;
     }
+    else if (g_PromptState[client] == Prompt_ClanDescInput)
+    {
+        if (StrEqual(text, "/cancel", false))
+        {
+            g_PromptState[client] = Prompt_None;
+            PrintToChat(client, "[Clans] Clan description update cancelled.");
+            return Plugin_Handled;
+        }
+
+        g_PromptState[client] = Prompt_None;
+        StartSetClanDescFromInput(client, text);
+        return Plugin_Handled;
+    }
+    else if (g_PromptState[client] == Prompt_ClanAdminDescInput)
+    {
+        if (StrEqual(text, "/cancel", false))
+        {
+            ResetClientState(client);
+            PrintToChat(client, "[Clans] Clan description update cancelled.");
+            return Plugin_Handled;
+        }
+
+        g_PromptState[client] = Prompt_None;
+        StartSetAdminClanDescFromInput(client, text);
+        return Plugin_Handled;
+    }
 
     return Plugin_Continue;
 }
@@ -1442,6 +1513,80 @@ void StartSetMainClanTagFromInput(int client, const char[] input)
     GetClanByPlayer(steamid64, SQL_OnClanTagContext, pack);
 }
 
+void StartSetClanDescFromInput(int client, const char[] input)
+{
+    char description[CLAN_DESC_MAXLEN + 1];
+    strcopy(description, sizeof(description), input);
+    StripQuotes(description);
+    TrimString(description);
+
+    if (!description[0])
+    {
+        PrintToChat(client, "[Clans] Description cannot be empty.");
+        return;
+    }
+
+    if (strlen(description) > CLAN_DESC_MAXLEN)
+    {
+        PrintToChat(client, "[Clans] Description is too long. Max length: %d.", CLAN_DESC_MAXLEN);
+        return;
+    }
+
+    char steamid64[STEAMID64_MAXLEN];
+    if (!GetClientSteam64(client, steamid64, sizeof(steamid64)))
+    {
+        PrintToChat(client, "[Clans] Could not read your SteamID64.");
+        return;
+    }
+
+    DataPack pack = new DataPack();
+    pack.WriteCell(GetClientUserId(client));
+    pack.WriteString(description);
+
+    GetClanByPlayer(steamid64, SQL_OnClanDescContext, pack);
+}
+
+void StartSetAdminClanDescFromInput(int client, const char[] input)
+{
+    int clanId = g_PendingAdminClanDescId[client];
+
+    char clanName[CLAN_NAME_MAXLEN + 1];
+    strcopy(clanName, sizeof(clanName), g_PendingAdminClanDescName[client]);
+    g_PendingAdminClanDescId[client] = 0;
+    g_PendingAdminClanDescName[client][0] = '\0';
+
+    if (clanId <= 0)
+    {
+        PrintToChat(client, "[Clans] No clan selected.");
+        return;
+    }
+
+    char description[CLAN_DESC_MAXLEN + 1];
+    strcopy(description, sizeof(description), input);
+    StripQuotes(description);
+    TrimString(description);
+
+    if (!description[0])
+    {
+        PrintToChat(client, "[Clans] Description cannot be empty.");
+        return;
+    }
+
+    if (strlen(description) > CLAN_DESC_MAXLEN)
+    {
+        PrintToChat(client, "[Clans] Description is too long. Max length: %d.", CLAN_DESC_MAXLEN);
+        return;
+    }
+
+    DataPack pack = new DataPack();
+    pack.WriteCell(GetClientUserId(client));
+    pack.WriteCell(clanId);
+    pack.WriteString(description);
+    pack.WriteString(clanName);
+
+    GetClanById(clanId, SQL_OnAdminClanDescContext, pack);
+}
+
 void ShowClanMainMenu(int client, int clanId, ClanRank rank, const char[] clanName, const char[] clanTag, bool isOpen, int inviteCount)
 {
     Menu menu = new Menu(MenuHandler_ClanMain);
@@ -1485,6 +1630,7 @@ void ShowClanMainMenu(int client, int clanId, ClanRank rank, const char[] clanNa
         if (rank >= ClanRank_Owner)
         {
             menu.AddItem("tag", "Clan tag");
+            menu.AddItem("desc", "Clan description");
             menu.AddItem("open", isOpen ? "Close clan joining" : "Open clan joining");
             menu.AddItem("parent", "Parent clan");
         }
@@ -1506,6 +1652,17 @@ void ShowClanMainMenu(int client, int clanId, ClanRank rank, const char[] clanNa
         FormatEx(createLabel, sizeof(createLabel), "Create clan (-%d points)", CLAN_CREATE_COST);
         menu.AddItem("create", createLabel);
         menu.AddItem("join", "Join open clan");
+
+        if (inviteCount > 0)
+        {
+            char invitesLabel[64];
+            FormatEx(invitesLabel, sizeof(invitesLabel), "Invites (%d)", inviteCount);
+            menu.AddItem("invites", invitesLabel);
+        }
+        else
+        {
+            menu.AddItem("noop_invites", "Invites (0)", ITEMDRAW_DISABLED);
+        }
 
         if (inviteCount > 0)
         {
@@ -1581,13 +1738,18 @@ public Action Command_ClansList(int client, int args)
         return Plugin_Handled;
     }
 
-    char query[512];
+    char query[1024];
     FormatEx(query, sizeof(query),
-        "SELECT c.id, c.name, c.tag, COUNT(cm.steamid64) "
+        "SELECT c.id, c.name, c.tag, ("
+        ... "SELECT COUNT(1) FROM clan_members cm WHERE cm.clan_id = c.id"
+        ... ") + ("
+        ... "SELECT COUNT(1) "
+        ... "FROM clan_members cm_child "
+        ... "INNER JOIN clan_relations cr ON cr.clan_id_a = cm_child.clan_id "
+        ... "WHERE cr.relation_type = 3 AND cr.clan_id_b = c.id"
+        ... ") AS member_count "
         ... "FROM clans c "
-        ... "LEFT JOIN clan_members cm ON cm.clan_id = c.id "
-        ... "GROUP BY c.id, c.name, c.tag "
-        ... "ORDER BY COUNT(cm.steamid64) DESC, c.name ASC");
+        ... "ORDER BY member_count DESC, c.name ASC");
 
     g_Database.Query(SQL_OnClansListMenu, query, GetClientUserId(client));
     return Plugin_Handled;
@@ -1622,12 +1784,12 @@ public void SQL_OnClansListMenu(Database db, DBResultSet results, const char[] e
 
             char name[CLAN_NAME_MAXLEN + 1];
             char tag[CLAN_TAG_STORE_MAXLEN];
-            char info[16];
+            char info[96];
             char display[192];
 
             results.FetchString(1, name, sizeof(name));
             results.FetchString(2, tag, sizeof(tag));
-            IntToString(clanId, info, sizeof(info));
+            FormatEx(info, sizeof(info), "%d|%s", clanId, name);
 
             if (tag[0])
             {
@@ -1696,13 +1858,15 @@ public void SQL_OnClanInfoMenu(Database db, DBResultSet results, const char[] er
     char clanName[CLAN_NAME_MAXLEN + 1];
     char clanTag[CLAN_TAG_STORE_MAXLEN];
     char ownerSteam[STEAMID64_MAXLEN];
+    char description[CLAN_DESC_MAXLEN + 1];
     char ownerName[MAX_NAME_LENGTH * 2];
     char title[192];
-    char line[192];
+    char line[256];
 
     results.FetchString(0, clanName, sizeof(clanName));
     results.FetchString(1, clanTag, sizeof(clanTag));
     results.FetchString(2, ownerSteam, sizeof(ownerSteam));
+    results.FetchString(3, description, sizeof(description));
     ResolvePlayerDisplayName(ownerSteam, ownerName, sizeof(ownerName));
 
     Menu menu = new Menu(MenuHandler_ClanInfoMenu);
@@ -1715,7 +1879,10 @@ public void SQL_OnClanInfoMenu(Database db, DBResultSet results, const char[] er
     FormatEx(line, sizeof(line), "Clan tag: %s", clanTag[0] ? clanTag : "(none)");
     menu.AddItem("tag", line, ITEMDRAW_DISABLED);
 
-    FormatEx(line, sizeof(line), "Member count: %d", results.FetchInt(3));
+    FormatEx(line, sizeof(line), "Desc: %s", description[0] ? description : "(none)");
+    menu.AddItem("desc", line, ITEMDRAW_DISABLED);
+
+    FormatEx(line, sizeof(line), "Member count: %d", results.FetchInt(4));
     menu.AddItem("members", line, ITEMDRAW_DISABLED);
 
     menu.ExitButton = true;
@@ -1786,6 +1953,10 @@ public int MenuHandler_ClanMain(Menu menu, MenuAction action, int param1, int pa
         {
             Command_ClanJoin(client, 0);
         }
+        else if (StrEqual(info, "invites", false))
+        {
+            Command_ClanInvites(client, 0);
+        }
         else if (StrEqual(info, "accept", false))
         {
             Command_ClanAcceptInvite(client, 0);
@@ -1805,6 +1976,10 @@ public int MenuHandler_ClanMain(Menu menu, MenuAction action, int param1, int pa
         else if (StrEqual(info, "tag", false))
         {
             StartClanTagPrompt(client);
+        }
+        else if (StrEqual(info, "desc", false))
+        {
+            Command_ClanDesc(client, 0);
         }
         else if (StrEqual(info, "invite", false))
         {
@@ -1853,6 +2028,333 @@ public Action Command_ClanMembers(int client, int args)
 
     GetClanByPlayer(steamid64, SQL_OnClanMembersContext, GetClientUserId(client));
     return Plugin_Handled;
+}
+
+public Action Command_ClanDesc(int client, int args)
+{
+    if (client <= 0)
+    {
+        ReplyToCommand(client, "[Clans] This command can only be used by players.");
+        return Plugin_Handled;
+    }
+
+    if (!EnsureDatabaseReady(client))
+    {
+        return Plugin_Handled;
+    }
+
+    char steamid64[STEAMID64_MAXLEN];
+    if (!GetClientSteam64(client, steamid64, sizeof(steamid64)))
+    {
+        PrintToChat(client, "[Clans] Could not read your SteamID64.");
+        return Plugin_Handled;
+    }
+
+    GetClanByPlayer(steamid64, SQL_OnClanDescPromptContext, GetClientUserId(client));
+    return Plugin_Handled;
+}
+
+public Action Command_ClanSetDesc(int client, int args)
+{
+    if (client <= 0)
+    {
+        ReplyToCommand(client, "[Clans] This command can only be used by players.");
+        return Plugin_Handled;
+    }
+
+    if (!EnsureDatabaseReady(client))
+    {
+        return Plugin_Handled;
+    }
+
+    char query[1024];
+    FormatEx(query, sizeof(query),
+        "SELECT c.id, c.name, c.tag, ("
+        ... "SELECT COUNT(1) FROM clan_members cm WHERE cm.clan_id = c.id"
+        ... ") + ("
+        ... "SELECT COUNT(1) "
+        ... "FROM clan_members cm_child "
+        ... "INNER JOIN clan_relations cr ON cr.clan_id_a = cm_child.clan_id "
+        ... "WHERE cr.relation_type = 3 AND cr.clan_id_b = c.id"
+        ... ") AS member_count "
+        ... "FROM clans c "
+        ... "ORDER BY member_count DESC, c.name ASC");
+
+    g_Database.Query(SQL_OnClanSetDescMenu, query, GetClientUserId(client));
+    return Plugin_Handled;
+}
+
+public void SQL_OnClanSetDescMenu(Database db, DBResultSet results, const char[] error, any data)
+{
+    int client = GetClientOfUserId(data);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Clan setdesc list query failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to load the clan list.");
+        return;
+    }
+
+    Menu menu = new Menu(MenuHandler_ClanSetDescList);
+    menu.SetTitle("Set Clan Desc");
+    menu.ExitButton = true;
+
+    bool added = false;
+    if (results != null)
+    {
+        while (results.FetchRow())
+        {
+            int clanId = results.FetchInt(0);
+            int memberCount = results.FetchInt(3);
+
+            char name[CLAN_NAME_MAXLEN + 1];
+            char tag[CLAN_TAG_STORE_MAXLEN];
+            char info[96];
+            char display[192];
+
+            results.FetchString(1, name, sizeof(name));
+            results.FetchString(2, tag, sizeof(tag));
+            FormatEx(info, sizeof(info), "%d|%s", clanId, name);
+
+            if (tag[0])
+            {
+                FormatEx(display, sizeof(display), "%s %s (%d)", name, tag, memberCount);
+            }
+            else
+            {
+                FormatEx(display, sizeof(display), "%s (%d)", name, memberCount);
+            }
+
+            menu.AddItem(info, display);
+            added = true;
+        }
+    }
+
+    if (!added)
+    {
+        menu.AddItem("none", "No clans found", ITEMDRAW_DISABLED);
+    }
+
+    menu.Display(client, CLAN_MENU_TIME);
+}
+
+public int MenuHandler_ClanSetDescList(Menu menu, MenuAction action, int param1, int param2)
+{
+    if (action == MenuAction_End)
+    {
+        delete menu;
+    }
+    else if (action == MenuAction_Select)
+    {
+        char info[96];
+        menu.GetItem(param2, info, sizeof(info));
+
+        int sep = StrContains(info, "|");
+        if (sep == -1)
+        {
+            return 0;
+        }
+
+        char clanIdText[16];
+        char clanName[CLAN_NAME_MAXLEN + 1];
+        strcopy(clanIdText, sizeof(clanIdText), info);
+        clanIdText[sep] = '\0';
+        strcopy(clanName, sizeof(clanName), info[sep + 1]);
+
+        int clanId = StringToInt(clanIdText);
+        if (clanId <= 0)
+        {
+            return 0;
+        }
+
+        g_PendingAdminClanDescId[param1] = clanId;
+        strcopy(g_PendingAdminClanDescName[param1], sizeof(g_PendingAdminClanDescName[]), clanName);
+        g_PromptState[param1] = Prompt_ClanAdminDescInput;
+
+        PrintToChat(param1, "[Clans] Type the new description for '%s' in chat. Max length: %d. Type /cancel to abort.", clanName, CLAN_DESC_MAXLEN);
+    }
+
+    return 0;
+}
+
+public void SQL_OnClanDescPromptContext(Database db, DBResultSet results, const char[] error, any data)
+{
+    int client = GetClientOfUserId(data);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Clan description prompt context failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to look up your clan.");
+        return;
+    }
+
+    if (results == null || !results.FetchRow())
+    {
+        PrintToChat(client, "[Clans] You are not in a clan.");
+        return;
+    }
+
+    if (view_as<ClanRank>(results.FetchInt(ClanByPlayerCol_Rank)) < ClanRank_Owner)
+    {
+        PrintToChat(client, "[Clans] Only the clan owner can set the clan description.");
+        return;
+    }
+
+    g_PromptState[client] = Prompt_ClanDescInput;
+    PrintToChat(client, "[Clans] Type your clan description in chat. Max length: %d. Type /cancel to abort.", CLAN_DESC_MAXLEN);
+}
+
+public void SQL_OnClanDescContext(Database db, DBResultSet results, const char[] error, any data)
+{
+    DataPack pack = view_as<DataPack>(data);
+    pack.Reset();
+
+    int userId = pack.ReadCell();
+    char description[CLAN_DESC_MAXLEN + 1];
+    pack.ReadString(description, sizeof(description));
+    delete pack;
+
+    int client = GetClientOfUserId(userId);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Clan description context failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to look up your clan.");
+        return;
+    }
+
+    if (results == null || !results.FetchRow())
+    {
+        PrintToChat(client, "[Clans] You are not in a clan.");
+        return;
+    }
+
+    if (view_as<ClanRank>(results.FetchInt(ClanByPlayerCol_Rank)) < ClanRank_Owner)
+    {
+        PrintToChat(client, "[Clans] Only the clan owner can set the clan description.");
+        return;
+    }
+
+    int clanId = results.FetchInt(ClanByPlayerCol_Id);
+
+    DataPack next = new DataPack();
+    next.WriteCell(userId);
+    next.WriteString(description);
+
+    SetClanDescription(clanId, description, SQL_OnClanDescSet, next);
+}
+
+public void SQL_OnAdminClanDescContext(Database db, DBResultSet results, const char[] error, any data)
+{
+    DataPack pack = view_as<DataPack>(data);
+    pack.Reset();
+
+    int userId = pack.ReadCell();
+    int clanId = pack.ReadCell();
+    char description[CLAN_DESC_MAXLEN + 1];
+    char fallbackClanName[CLAN_NAME_MAXLEN + 1];
+    pack.ReadString(description, sizeof(description));
+    pack.ReadString(fallbackClanName, sizeof(fallbackClanName));
+    delete pack;
+
+    int client = GetClientOfUserId(userId);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Admin clan description context failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to look up that clan.");
+        return;
+    }
+
+    if (results == null || !results.FetchRow())
+    {
+        PrintToChat(client, "[Clans] That clan no longer exists.");
+        return;
+    }
+
+    char clanName[CLAN_NAME_MAXLEN + 1];
+    results.FetchString(1, clanName, sizeof(clanName));
+    if (!clanName[0])
+    {
+        strcopy(clanName, sizeof(clanName), fallbackClanName);
+    }
+
+    DataPack next = new DataPack();
+    next.WriteCell(userId);
+    next.WriteString(clanName);
+    next.WriteString(description);
+
+    SetClanDescription(clanId, description, SQL_OnAdminClanDescSet, next);
+}
+
+public void SQL_OnClanDescSet(Database db, DBResultSet results, const char[] error, any data)
+{
+    DataPack pack = view_as<DataPack>(data);
+    pack.Reset();
+
+    int userId = pack.ReadCell();
+    char description[CLAN_DESC_MAXLEN + 1];
+    pack.ReadString(description, sizeof(description));
+    delete pack;
+
+    int client = GetClientOfUserId(userId);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Set description failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to set the clan description.");
+        return;
+    }
+
+    PrintToChat(client, "[Clans] Clan description updated.");
+}
+
+public void SQL_OnAdminClanDescSet(Database db, DBResultSet results, const char[] error, any data)
+{
+    DataPack pack = view_as<DataPack>(data);
+    pack.Reset();
+
+    int userId = pack.ReadCell();
+    char clanName[CLAN_NAME_MAXLEN + 1];
+    char description[CLAN_DESC_MAXLEN + 1];
+    pack.ReadString(clanName, sizeof(clanName));
+    pack.ReadString(description, sizeof(description));
+    delete pack;
+
+    int client = GetClientOfUserId(userId);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Admin set description failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to set that clan description.");
+        return;
+    }
+
+    PrintToChat(client, "[Clans] Clan description updated for '%s'.", clanName);
 }
 
 public Action Command_ClanInfo(int client, int args)
@@ -1934,9 +2436,10 @@ public Action Command_ClanInfo(int client, int args)
         escapedInput,
         escapedInput,
         escapedInput,
+        escapedInput,
+        escapedInput,
+        escapedInput,
         escapedFormatted,
-        escapedInput,
-        escapedInput,
         escapedInput,
         escapedInput,
         escapedInput,
@@ -2018,17 +2521,20 @@ public void SQL_OnClanInfoById(Database db, DBResultSet results, const char[] er
     char clanName[CLAN_NAME_MAXLEN + 1];
     char clanTag[CLAN_TAG_STORE_MAXLEN];
     char ownerSteam[STEAMID64_MAXLEN];
+    char description[CLAN_DESC_MAXLEN + 1];
     char ownerName[MAX_NAME_LENGTH * 2];
 
     results.FetchString(0, clanName, sizeof(clanName));
     results.FetchString(1, clanTag, sizeof(clanTag));
     results.FetchString(2, ownerSteam, sizeof(ownerSteam));
+    results.FetchString(3, description, sizeof(description));
     ResolvePlayerDisplayName(ownerSteam, ownerName, sizeof(ownerName));
 
     CPrintToChat(client, "{default}[Clans] %s", clanName);
     CPrintToChat(client, "{default}[Clans] Owner: %s", ownerName);
     CPrintToChat(client, "{default}[Clans] Clan tag: %s", clanTag[0] ? clanTag : "(none)");
-    CPrintToChat(client, "{default}[Clans] Member count: %d", results.FetchInt(3));
+    CPrintToChat(client, "{default}[Clans] Desc: %s", description[0] ? description : "(none)");
+    CPrintToChat(client, "{default}[Clans] Member count: %d", results.FetchInt(4));
 }
 
 public void SQL_OnClanMembersContext(Database db, DBResultSet results, const char[] error, any data)
@@ -2944,7 +3450,7 @@ public void SQL_OnClanInviteCreated(Database db, DBResultSet results, const char
     {
         char inviterName[MAX_NAME_LENGTH];
         ResolvePlayerDisplayName(inviterSteam, inviterName, sizeof(inviterName));
-        PrintToChat(target, "[Clans] %s invited you to join '%s'. Type !accept or !yes to accept, or !deny to decline.", inviterName, clanName);
+        PrintToChat(target, "[Clans] %s has invited you to clan %s!", inviterName, clanName);
     }
 
     AnnounceClanInviteToMembers(clanId, clanName, inviterSteam, targetSteam);
@@ -4323,6 +4829,181 @@ void AddInviteMenuItem(Menu menu, int inviteId, const char[] clanName, const cha
     }
 
     menu.AddItem(info, display);
+}
+
+void AddInviteBrowseMenuItem(Menu menu, int inviteId, const char[] clanName, const char[] clanTag, const char[] inviterName, int expiresAt)
+{
+    int secondsLeft = expiresAt - GetTime();
+    if (secondsLeft < 0)
+    {
+        secondsLeft = 0;
+    }
+
+    int daysLeft = (secondsLeft + 86399) / 86400;
+    if (daysLeft < 1)
+    {
+        daysLeft = 1;
+    }
+
+    char display[256];
+    if (clanTag[0])
+    {
+        FormatEx(display, sizeof(display), "From %s: %s %s (%d day%s left)", inviterName, clanName, clanTag, daysLeft, (daysLeft == 1) ? "" : "s");
+    }
+    else
+    {
+        FormatEx(display, sizeof(display), "From %s: %s (%d day%s left)", inviterName, clanName, daysLeft, (daysLeft == 1) ? "" : "s");
+    }
+
+    char info[16];
+    IntToString(inviteId, info, sizeof(info));
+    menu.AddItem(info, display);
+}
+
+void ShowInviteActionMenu(int client, int inviteId, const char[] summary)
+{
+    Menu menu = new Menu(MenuHandler_ClanInviteAction);
+
+    char title[256];
+    FormatEx(title, sizeof(title), "Invite Actions\n%s", summary);
+    menu.SetTitle(title);
+    menu.ExitBackButton = true;
+
+    char info[16];
+    IntToString(inviteId, info, sizeof(info));
+    menu.AddItem(info, "Accept");
+    menu.AddItem(info, "Deny");
+    menu.Display(client, MENU_TIME_FOREVER);
+}
+
+public Action Command_ClanInvites(int client, int args)
+{
+    if (client <= 0)
+    {
+        ReplyToCommand(client, "[Clans] This command can only be used by players.");
+        return Plugin_Handled;
+    }
+
+    if (!EnsureDatabaseReady(client))
+    {
+        return Plugin_Handled;
+    }
+
+    char steamid64[STEAMID64_MAXLEN];
+    if (!GetClientSteam64(client, steamid64, sizeof(steamid64)))
+    {
+        PrintToChat(client, "[Clans] Could not read your SteamID64.");
+        return Plugin_Handled;
+    }
+
+    GetPendingInvites(steamid64, SQL_OnPendingInvitesForBrowse, GetClientUserId(client));
+    return Plugin_Handled;
+}
+
+public void SQL_OnPendingInvitesForBrowse(Database db, DBResultSet results, const char[] error, any data)
+{
+    int client = GetClientOfUserId(data);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Pending invite query (browse) failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to load your clan invites.");
+        return;
+    }
+
+    Menu menu = new Menu(MenuHandler_ClanInvites);
+    menu.SetTitle("Clan Invites");
+    menu.ExitButton = true;
+
+    bool added = false;
+    while (results != null && results.FetchRow())
+    {
+        int inviteId = results.FetchInt(PendingInviteCol_Id);
+        char clanName[CLAN_NAME_MAXLEN + 1];
+        char clanTag[CLAN_TAG_STORE_MAXLEN];
+        char inviterSteam[STEAMID64_MAXLEN];
+        char inviterName[MAX_NAME_LENGTH * 2];
+        int expiresAt = results.FetchInt(PendingInviteCol_ExpiresAt);
+
+        results.FetchString(PendingInviteCol_ClanName, clanName, sizeof(clanName));
+        results.FetchString(PendingInviteCol_ClanTag, clanTag, sizeof(clanTag));
+        results.FetchString(PendingInviteCol_InvitedBy, inviterSteam, sizeof(inviterSteam));
+        ResolvePlayerDisplayName(inviterSteam, inviterName, sizeof(inviterName));
+
+        AddInviteBrowseMenuItem(menu, inviteId, clanName, clanTag, inviterName, expiresAt);
+        added = true;
+    }
+
+    if (!added)
+    {
+        menu.AddItem("none", "No pending clan invites", ITEMDRAW_DISABLED);
+    }
+
+    menu.Display(client, MENU_TIME_FOREVER);
+}
+
+public int MenuHandler_ClanInvites(Menu menu, MenuAction action, int param1, int param2)
+{
+    if (action == MenuAction_End)
+    {
+        delete menu;
+    }
+    else if (action == MenuAction_Select)
+    {
+        char info[16];
+        char display[256];
+        menu.GetItem(param2, info, sizeof(info), _, display, sizeof(display));
+
+        int inviteId = StringToInt(info);
+        if (inviteId > 0)
+        {
+            ShowInviteActionMenu(param1, inviteId, display);
+        }
+    }
+
+    return 0;
+}
+
+public int MenuHandler_ClanInviteAction(Menu menu, MenuAction action, int param1, int param2)
+{
+    if (action == MenuAction_End)
+    {
+        delete menu;
+    }
+    else if (action == MenuAction_Cancel)
+    {
+        if (param2 == MenuCancel_ExitBack)
+        {
+            Command_ClanInvites(param1, 0);
+        }
+    }
+    else if (action == MenuAction_Select)
+    {
+        char info[16];
+        char display[32];
+        menu.GetItem(param2, info, sizeof(info), _, display, sizeof(display));
+
+        int inviteId = StringToInt(info);
+        if (inviteId <= 0)
+        {
+            return 0;
+        }
+
+        if (StrEqual(display, "Accept", false))
+        {
+            StartAcceptInvite(param1, inviteId);
+        }
+        else
+        {
+            StartDenyInvite(param1, inviteId);
+        }
+    }
+
+    return 0;
 }
 
 public Action Command_ClanAcceptInvite(int client, int args)
