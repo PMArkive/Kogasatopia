@@ -123,7 +123,7 @@ public void OnPluginStart()
     AutoExecConfig(true, "clans");
 
     RegConsoleCmd("sm_clan", Command_ClanMenu, "Open the clan menu.");
-    RegConsoleCmd("sm_clans", Command_ClanMenu, "Open the clan menu.");
+    RegConsoleCmd("sm_clans", Command_ClansList, "Browse clans.");
     RegConsoleCmd("sm_clancreate", Command_ClanCreate, "Create a clan.");
     RegConsoleCmd("sm_clanleave", Command_ClanLeave, "Leave your clan or delete it if you are the owner.");
     RegConsoleCmd("sm_claninvite", Command_ClanInvite, "Invite a player to your clan.");
@@ -1566,6 +1566,170 @@ public Action Command_ClanMenu(int client, int args)
 
     g_Database.Query(SQL_OnClanMenuContext, query, GetClientUserId(client));
     return Plugin_Handled;
+}
+
+public Action Command_ClansList(int client, int args)
+{
+    if (client <= 0)
+    {
+        ReplyToCommand(client, "[Clans] This command can only be used by players.");
+        return Plugin_Handled;
+    }
+
+    if (!EnsureDatabaseReady(client))
+    {
+        return Plugin_Handled;
+    }
+
+    char query[512];
+    FormatEx(query, sizeof(query),
+        "SELECT c.id, c.name, c.tag, COUNT(cm.steamid64) "
+        ... "FROM clans c "
+        ... "LEFT JOIN clan_members cm ON cm.clan_id = c.id "
+        ... "GROUP BY c.id, c.name, c.tag "
+        ... "ORDER BY COUNT(cm.steamid64) DESC, c.name ASC");
+
+    g_Database.Query(SQL_OnClansListMenu, query, GetClientUserId(client));
+    return Plugin_Handled;
+}
+
+public void SQL_OnClansListMenu(Database db, DBResultSet results, const char[] error, any data)
+{
+    int client = GetClientOfUserId(data);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Clan list query failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to load the clan list.");
+        return;
+    }
+
+    Menu menu = new Menu(MenuHandler_ClansList);
+    menu.SetTitle("Clans");
+    menu.ExitButton = true;
+
+    bool added = false;
+    if (results != null)
+    {
+        while (results.FetchRow())
+        {
+            int clanId = results.FetchInt(0);
+            int memberCount = results.FetchInt(3);
+
+            char name[CLAN_NAME_MAXLEN + 1];
+            char tag[CLAN_TAG_STORE_MAXLEN];
+            char info[16];
+            char display[192];
+
+            results.FetchString(1, name, sizeof(name));
+            results.FetchString(2, tag, sizeof(tag));
+            IntToString(clanId, info, sizeof(info));
+
+            if (tag[0])
+            {
+                FormatEx(display, sizeof(display), "%s %s (%d)", name, tag, memberCount);
+            }
+            else
+            {
+                FormatEx(display, sizeof(display), "%s (%d)", name, memberCount);
+            }
+
+            menu.AddItem(info, display);
+            added = true;
+        }
+    }
+
+    if (!added)
+    {
+        menu.AddItem("none", "No clans found", ITEMDRAW_DISABLED);
+    }
+
+    menu.Display(client, CLAN_MENU_TIME);
+}
+
+public int MenuHandler_ClansList(Menu menu, MenuAction action, int param1, int param2)
+{
+    if (action == MenuAction_End)
+    {
+        delete menu;
+    }
+    else if (action == MenuAction_Select)
+    {
+        char info[16];
+        menu.GetItem(param2, info, sizeof(info));
+
+        int clanId = StringToInt(info);
+        if (clanId > 0)
+        {
+            GetClanInfoById(clanId, SQL_OnClanInfoMenu, GetClientUserId(param1));
+        }
+    }
+
+    return 0;
+}
+
+public void SQL_OnClanInfoMenu(Database db, DBResultSet results, const char[] error, any data)
+{
+    int client = GetClientOfUserId(data);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Clan info menu query failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to load clan info.");
+        return;
+    }
+
+    if (results == null || !results.FetchRow())
+    {
+        PrintToChat(client, "[Clans] Clan not found.");
+        return;
+    }
+
+    char clanName[CLAN_NAME_MAXLEN + 1];
+    char clanTag[CLAN_TAG_STORE_MAXLEN];
+    char ownerSteam[STEAMID64_MAXLEN];
+    char ownerName[MAX_NAME_LENGTH * 2];
+    char title[192];
+    char line[192];
+
+    results.FetchString(0, clanName, sizeof(clanName));
+    results.FetchString(1, clanTag, sizeof(clanTag));
+    results.FetchString(2, ownerSteam, sizeof(ownerSteam));
+    ResolvePlayerDisplayName(ownerSteam, ownerName, sizeof(ownerName));
+
+    Menu menu = new Menu(MenuHandler_ClanInfoMenu);
+    FormatEx(title, sizeof(title), "Clan Info\n%s", clanName);
+    menu.SetTitle(title);
+
+    FormatEx(line, sizeof(line), "Owner: %s", ownerName);
+    menu.AddItem("owner", line, ITEMDRAW_DISABLED);
+
+    FormatEx(line, sizeof(line), "Clan tag: %s", clanTag[0] ? clanTag : "(none)");
+    menu.AddItem("tag", line, ITEMDRAW_DISABLED);
+
+    FormatEx(line, sizeof(line), "Member count: %d", results.FetchInt(3));
+    menu.AddItem("members", line, ITEMDRAW_DISABLED);
+
+    menu.ExitButton = true;
+    menu.Display(client, CLAN_MENU_TIME);
+}
+
+public int MenuHandler_ClanInfoMenu(Menu menu, MenuAction action, int param1, int param2)
+{
+    if (action == MenuAction_End)
+    {
+        delete menu;
+    }
+
+    return 0;
 }
 
 public void SQL_OnClanMenuContext(Database db, DBResultSet results, const char[] error, any data)
