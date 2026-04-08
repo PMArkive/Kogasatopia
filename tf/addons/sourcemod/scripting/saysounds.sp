@@ -52,6 +52,7 @@ public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int errlen)
     RegPluginLibrary("saysounds");
     CreateNative("SaySounds_ShouldPlay", Native_ShouldPlay);
     CreateNative("SaySounds_PlaySoundToOptedIn", Native_PlaySoundToOptedIn);
+    CreateNative("SaySounds_PlayCommand", Native_PlayCommand);
     return APLRes_Success;
 }
 
@@ -750,6 +751,35 @@ public int Native_PlaySoundToOptedIn(Handle plugin, int numParams)
     return 0;
 }
 
+public int Native_PlayCommand(Handle plugin, int numParams)
+{
+    int client = GetNativeCell(1);
+    if (client < 0 || client > MaxClients)
+    {
+        return 0;
+    }
+
+    char commandName[MAX_COMMAND_NAME * 4];
+    GetNativeString(2, commandName, sizeof(commandName));
+    TrimString(commandName);
+    ToLowercaseInPlace(commandName, sizeof(commandName));
+
+    if (!commandName[0])
+    {
+        return 0;
+    }
+
+    char soundPath[PLATFORM_MAX_PATH];
+    char groupName[MAX_GROUP_NAME];
+    if (!GetCommandSoundData(commandName, soundPath, sizeof(soundPath), groupName, sizeof(groupName)))
+    {
+        return 0;
+    }
+
+    PrecacheSound(soundPath, true);
+    return PlaySaySoundToTarget(client, soundPath, groupName);
+}
+
 public Action Command_SetVolume(int client, int args)
 {
     if (client <= 0 || !IsClientInGame(client))
@@ -1002,7 +1032,7 @@ public Action Command_PlaySpecificSound(int client, int args)
         return Plugin_Handled;
     }
 
-    PlaySaySound(path, groupName);
+    PlaySaySoundToTarget(0, path, groupName);
     g_fNextAllowedSound[client] = GetGameTime() + DEFAULT_COOLDOWN;
     return Plugin_Handled;
 }
@@ -1240,41 +1270,67 @@ static bool ClientMatchesGroup(int client, const char[] groupName)
     return StrEqual(g_szClientGroup[client], groupName);
 }
 
+static bool CanPlaySaySoundToClient(int client, const char[] groupName, float &emitVolume)
+{
+    if (client <= 0 || client > MaxClients || !IsClientInGame(client))
+    {
+        return false;
+    }
+
+    if (g_hForce != null && g_hForce.BoolValue)
+    {
+        emitVolume = 1.0;
+        return true;
+    }
+
+    emitVolume = GetClientVolume(client);
+    if (emitVolume <= 0.0)
+    {
+        return false;
+    }
+
+    if (!ClientMatchesGroup(client, groupName))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+static bool PlaySaySoundToTarget(int client, const char[] soundPath, const char[] groupName)
+{
+    bool played = false;
+
+    if (client == 0)
+    {
+        for (int i = 1; i <= MaxClients; i++)
+        {
+            float emitVolume;
+            if (!CanPlaySaySoundToClient(i, groupName, emitVolume))
+            {
+                continue;
+            }
+
+            EmitSoundToClient(i, soundPath, i, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, emitVolume, SNDPITCH_NORMAL);
+            played = true;
+        }
+
+        return played;
+    }
+
+    float emitVolume;
+    if (!CanPlaySaySoundToClient(client, groupName, emitVolume))
+    {
+        return false;
+    }
+
+    EmitSoundToClient(client, soundPath, client, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, emitVolume, SNDPITCH_NORMAL);
+    return true;
+}
+
 static void PlaySaySound(const char[] soundPath, const char[] groupName)
 {
-    bool forceAll = (g_hForce != null && g_hForce.BoolValue);
-
-    for (int i = 1; i <= MaxClients; i++)
-    {
-        if (!IsClientInGame(i))
-        {
-            continue;
-        }
-
-        float emitVolume;
-
-        if (forceAll)
-        {
-            emitVolume = 1.0;
-        }
-        else
-        {
-            float volume = GetClientVolume(i);
-            if (volume <= 0.0)
-            {
-                continue;
-            }
-
-            if (!ClientMatchesGroup(i, groupName))
-            {
-                continue;
-            }
-
-            emitVolume = volume;
-        }
-
-        EmitSoundToClient(i, soundPath, i, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, emitVolume, SNDPITCH_NORMAL);
-    }
+    PlaySaySoundToTarget(0, soundPath, groupName);
 }
 
 void LoadDeathSoundPreference(int client)
