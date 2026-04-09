@@ -62,9 +62,11 @@ stock void TF_SetMetalAmount(int client, int metal)
 
 stock int CheckScythe(int client)
 {
-    int tally = 0;
     int scythe = GetPlayerWeaponSlot(client, 2);
+    if (scythe <= MaxClients || !IsValidEntity(scythe))
+        return 0;
 
+    int tally = 0;
     if (TF2CustAttr_GetInt(scythe, "harvester attributes") != 0)
         tally++;
     if (scythe == GetEntPropEnt(client, Prop_Data, "m_hActiveWeapon"))
@@ -75,21 +77,25 @@ stock int CheckScythe(int client)
 
 stock int CheckShock(int client)
 {
-    int tally = 0;
     int shock = GetPlayerWeaponSlot(client, 2);
+    int tally = (tf2_players[client].shockCharge != 30) ? 1 : 0;
+    if (shock <= MaxClients || !IsValidEntity(shock))
+        return tally;
+
     if (TF2CustAttr_GetInt(shock, "shock therapy attributes") != 0)
         tally++;
     if (shock == GetEntPropEnt(client, Prop_Data, "m_hActiveWeapon"))
         tally++;
-    if (tf2_players[client].shockCharge != 30)
-        tally = 1;
     return tally;
 }
 
 stock int CheckDesertEagle(int client)
 {
-    int tally = 0;
     int deagle = GetPlayerWeaponSlot(client, 1);
+    if (deagle <= MaxClients || !IsValidEntity(deagle))
+        return 0;
+
+    int tally = 0;
     if (TF2CustAttr_GetInt(deagle, "can headshot sm") != 0)
         tally++;
     if (deagle == GetEntPropEnt(client, Prop_Data, "m_hActiveWeapon"))

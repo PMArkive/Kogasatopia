@@ -1241,8 +1241,9 @@ stock bool GetClientPadsEnabled(int iClient)
 stock bool GetClientEngipadsAttribute(int iClient, int slot)
 {
 	int weapon = GetPlayerWeaponSlot(iClient, slot);
-	if (weapon <= 0)
+	if (weapon <= MaxClients || !IsValidEntity(weapon))
 		return false;
+
 	return TF2CustAttr_GetInt(weapon, "engipads attributes") != 0;
 }
 

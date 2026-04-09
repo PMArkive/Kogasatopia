@@ -1001,17 +1001,19 @@ public Action Timer_RemoveAmplifierEffect(Handle timer, int userid)
 stock int CheckAmpAttributesDisp(int client)
 {
 	int weapon = GetPlayerWeaponSlot(client, 4);
-	if (weapon == -1) return 0;
-	if (TF2CustAttr_GetInt(weapon, "amplifier attributes") != 0) return 1;
-	return 0;
+	if (weapon <= MaxClients || !IsValidEntity(weapon))
+		return 0;
+
+	return (TF2CustAttr_GetInt(weapon, "amplifier attributes") != 0) ? 1 : 0;
 }
 
 stock int CheckAmpAttributesSentry(int client)
 {
 	int weapon = GetPlayerWeaponSlot(client, 4);
-	if (weapon == -1) return 0;
-	if (TF2CustAttr_GetInt(weapon, "amplifier attributes sentry") != 0) return 1;
-	return 0;
+	if (weapon <= MaxClients || !IsValidEntity(weapon))
+		return 0;
+
+	return (TF2CustAttr_GetInt(weapon, "amplifier attributes sentry") != 0) ? 1 : 0;
 }
 
 void ConvertAllAmplifiersToBuildings()

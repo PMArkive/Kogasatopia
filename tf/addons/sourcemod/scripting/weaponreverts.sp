@@ -347,7 +347,7 @@ static bool Accuracy_IsValidClient(int client)
 
 static bool Accuracy_IsValidShotgun(int weapon)
 {
-	return (weapon != -1 && IsValidEntity(weapon) && TF2CustAttr_GetInt(weapon, "flame shotgun attributes") != 0);
+	return (weapon > MaxClients && IsValidEntity(weapon) && TF2CustAttr_GetInt(weapon, "flame shotgun attributes") != 0);
 }
 
 static Action OnBuildingDamaged(int entity, int &attacker, int &inflictor, float &damage, int &damagetype)
@@ -356,7 +356,7 @@ static Action OnBuildingDamaged(int entity, int &attacker, int &inflictor, float
 		return Plugin_Continue;
 
 	int weapon = GetEntPropEnt(attacker, Prop_Data, "m_hActiveWeapon");
-	if (weapon <= 0 || !IsValidEntity(weapon))
+	if (weapon <= MaxClients || !IsValidEntity(weapon))
 		return Plugin_Continue;
 
 	int drainAttr = TF2CustAttr_GetInt(weapon, "drain ammo on hit sentry");
@@ -693,7 +693,7 @@ public Action Event_Resupply(Event event, const char[] name, bool dontBroadcast)
 	}
 
 	int watch = GetPlayerWeaponSlot(client, 4);
-	if ((watch > -1) && TF2CustAttr_GetInt(watch, "escampette attributes") != 1.0)
+	if (watch > MaxClients && IsValidEntity(watch) && TF2CustAttr_GetInt(watch, "escampette attributes") != 1)
 	{
 		TF2_RemoveCondition(client, TFCond_SpeedBuffAlly);
 		return Plugin_Changed;
@@ -779,7 +779,7 @@ Action OnEnergyRingTouch(int entity, int other) {
 }
 
 public Action TF2_CalcIsAttackCritical(client, weapon, String:weaponname[], &bool:result) {
-	if (!IsClientInGame(client) || !IsValidEntity(weapon))
+	if (!IsClientInGame(client) || weapon <= MaxClients || !IsValidEntity(weapon))
 		return Plugin_Continue;
 
 	if (GetEntityFlags(client) & FL_ONGROUND)
@@ -861,7 +861,7 @@ public Action OnWeaponSwitch(client, weapon)
 		return Plugin_Continue;
 	}
 
-	if (weapon == -1)
+	if (weapon <= MaxClients || !IsValidEntity(weapon))
 	{
 		return Plugin_Continue;
 	}
@@ -1019,7 +1019,7 @@ public Action OnTakeDamage(client, &attacker, &inflictor, &Float:damage, &damage
 		if (duelAttr != 0)
 		{
 			int victimWeapon = GetEntPropEnt(client, Prop_Data, "m_hActiveWeapon");
-			if (IsValidEntity(victimWeapon) && TF2CustAttr_GetInt(victimWeapon, "duel declared") != 0)
+			if (victimWeapon > MaxClients && IsValidEntity(victimWeapon) && TF2CustAttr_GetInt(victimWeapon, "duel declared") != 0)
 			{
 				if (GetClip(damageWeapon) == 6)
 				{
@@ -1031,7 +1031,8 @@ public Action OnTakeDamage(client, &attacker, &inflictor, &Float:damage, &damage
 		}
 	}
 
-	new wepindex = (IsValidEntity(weapon) && weapon > MaxClients ? GetEntProp(weapon, Prop_Send, "m_iItemDefinitionIndex") : -1);
+	bool validWeapon = (weapon > MaxClients && IsValidEntity(weapon));
+	new wepindex = (validWeapon ? GetEntProp(weapon, Prop_Send, "m_iItemDefinitionIndex") : -1);
 	if (wepindex == 442 || wepindex == 588)	 // Pomson, bison
 	{
 		float mult = 1.0;
@@ -1078,7 +1079,7 @@ public Action OnTakeDamage(client, &attacker, &inflictor, &Float:damage, &damage
 	} else {
 		// Moved watch lookup here so it's only called when actually needed
 		int watch = GetPlayerWeaponSlot(client, 4);
-		if ((watch != -1) && (TF2CustAttr_GetInt(watch, "escampette attributes") != 0)) { // TF2C Custom Attribute for Spy
+		if (watch > MaxClients && IsValidEntity(watch) && TF2CustAttr_GetInt(watch, "escampette attributes") != 0) { // TF2C Custom Attribute for Spy
 			if (TF2_IsPlayerInCondition(client, TFCond_Cloaked)) { // if cloaked
 				float flCloakMeter = GetEntPropFloat(client, Prop_Send, "m_flCloakMeter");
 				flCloakMeter -= 10;
@@ -1100,7 +1101,7 @@ public Action OnTakeDamage(client, &attacker, &inflictor, &Float:damage, &damage
 					return Plugin_Changed;
 				}
 			}
-		} else if ((weapon != -1) && (TF2CustAttr_GetInt(weapon, "twin barrel attributes") != 0)) {
+		} else if (validWeapon && TF2CustAttr_GetInt(weapon, "twin barrel attributes") != 0) {
 			float vecAngles[3];
 			float vecVelocity[3];
 
@@ -1114,12 +1115,12 @@ public Action OnTakeDamage(client, &attacker, &inflictor, &Float:damage, &damage
 
 			TeleportEntity(client, NULL_VECTOR, NULL_VECTOR, vecVelocity);
 			return Plugin_Changed;
-		} else if ((weapon != -1) && (TF2CustAttr_GetInt(weapon, "shock therapy attributes") != 0)) {
+		} else if (validWeapon && TF2CustAttr_GetInt(weapon, "shock therapy attributes") != 0) {
 			damage = float(tf2_players[attacker].shockCharge * 100 / 30);
 			tf2_players[attacker].shockCharge = 0;
 			EmitAmbientSound(SOUND_NEON_SIGN, damagePosition, client, SNDLEVEL_NORMAL);
 			return Plugin_Changed;
-		} else if ((weapon != -1) && (TF2CustAttr_GetInt(weapon, "hitscan ignite targets") != 0)) {
+		} else if (validWeapon && TF2CustAttr_GetInt(weapon, "hitscan ignite targets") != 0) {
 			if (GetClientDistance(client, attacker) <= 1024.0) {
 				TF2_IgnitePlayer(client, attacker, 4.0);
 				return Plugin_Changed;
@@ -1139,7 +1140,7 @@ public Action OnTraceAttack(victim, &attacker, &inflictor, &Float:damage, &damag
 	if (damagetype & DMG_BULLET)
 	{
 		int weapon = GetEntPropEnt(attacker, Prop_Send, "m_hActiveWeapon");
-		if (IsValidEntity(weapon) && TF2CustAttr_GetInt(weapon, "headshots enabled", 0))
+		if (weapon > MaxClients && IsValidEntity(weapon) && TF2CustAttr_GetInt(weapon, "headshots enabled", 0))
 		{
 			damagetype |= DMG_USE_HITLOCATIONS;
 			return Plugin_Changed;
@@ -1213,8 +1214,10 @@ public Action OnTakeDamageAlive(
 ) {
 
 	if (attacker < 1 || weapon < 1) return Plugin_Continue;
+	bool validWeapon = (weapon > MaxClients && IsValidEntity(weapon));
 
 	if (
+		validWeapon &&
 		damage > 0 &&
 		victim != attacker &&
 		inflictor == attacker &&
@@ -1233,7 +1236,7 @@ public Action OnTakeDamageAlive(
 		}
 	}
 	
-	if (TF2CustAttr_GetInt(weapon, "mark for death multiple") != 0)
+	if (validWeapon && TF2CustAttr_GetInt(weapon, "mark for death multiple") != 0)
 	{
 		bool shift_array = true;
 
@@ -1291,7 +1294,7 @@ MRESReturn CalculateMaxSpeed(int client, DHookReturn returnValue) {
 			{
 				int primary = GetPlayerWeaponSlot(client, TFWeaponSlot_Primary);
 
-				if (primary != -1 && TF2CustAttr_GetInt(primary, "original babyface attributes") == 1) {
+				if (primary > MaxClients && IsValidEntity(primary) && TF2CustAttr_GetInt(primary, "original babyface attributes") == 1) {
 					// Original BFB proper speed application
 					float boost = GetEntPropFloat(client, Prop_Send, "m_flHypeMeter");
 					returnValue.Value = view_as<float>(returnValue.Value) * ValveRemapVal(boost, 0.0, 99.0, 1.0, 1.383);
@@ -1353,7 +1356,7 @@ MRESReturn CartDispenseMetal(int entity, DHookReturn returnValue, DHookParam par
 	) {
 		int secondary = GetPlayerWeaponSlot(client, TFWeaponSlot_Secondary);
 
-		if (secondary > 0) {
+		if (secondary > MaxClients && IsValidEntity(secondary)) {
 			// Reduced metal yields from Payload carts
 			float ammo_mult = TF2CustAttr_GetFloat(secondary, "mult metal from carts", 1.0);
 
@@ -1367,6 +1370,9 @@ MRESReturn CartDispenseMetal(int entity, DHookReturn returnValue, DHookParam par
 
 public MRESReturn CanFireCriticalShot_Post(int weapon, DHookReturn hReturn, DHookParam parameters)
 {
+    if (weapon <= MaxClients || !IsValidEntity(weapon))
+        return MRES_Ignored;
+
     int client = GetEntPropEnt(weapon, Prop_Send, "m_hOwnerEntity");
     if (client <= 0 || client > MaxClients)
         return MRES_Ignored;
@@ -1390,7 +1396,7 @@ public TF2_OnConditionAdded(int client, TFCond condition)
 	if (condition == TFCond_Cloaked)
 	{
 		int weapon = GetPlayerWeaponSlot(client, 4);
-		if ( (weapon > -1) && TF2CustAttr_GetInt(weapon, "escampette attributes") != 0) {
+		if (weapon > MaxClients && IsValidEntity(weapon) && TF2CustAttr_GetInt(weapon, "escampette attributes") != 0) {
 				TF2_AddCondition(client, TFCond_SpeedBuffAlly, 120.0);
 		}
 	}
@@ -1425,7 +1431,7 @@ public TF2_OnConditionRemoved(int client, TFCond condition)
 	if (condition == TFCond_Cloaked)
 	{
 		int weapon = GetPlayerWeaponSlot(client, 4);
-		if ((weapon > -1) && TF2CustAttr_GetInt(weapon, "escampette attributes") != 0) {
+		if (weapon > MaxClients && IsValidEntity(weapon) && TF2CustAttr_GetInt(weapon, "escampette attributes") != 0) {
 				TF2_RemoveCondition(client, TFCond_SpeedBuffAlly);
 		}
 	}
