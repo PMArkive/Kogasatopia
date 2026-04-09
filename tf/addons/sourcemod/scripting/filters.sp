@@ -49,7 +49,7 @@ native int Hugs_GetRapesGiven(int client);
 native bool Hugs_AreStatsLoaded(int client);
 native int WhaleTracker_GetCumulativeKills(int client);
 native bool WhaleTracker_AreStatsLoaded(int client);
-native bool Tags_GetTag(int client, const char[] steamid64, char[] buffer, int maxlen);
+native bool Tags_GetSelectedTag(int client, char[] buffer, int maxlen);
 
 public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int err_max)
 {
@@ -60,7 +60,7 @@ public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int err_max)
     MarkNativeAsOptional("Hugs_AreStatsLoaded");
     MarkNativeAsOptional("WhaleTracker_GetCumulativeKills");
     MarkNativeAsOptional("WhaleTracker_AreStatsLoaded");
-    MarkNativeAsOptional("Tags_GetTag");
+    MarkNativeAsOptional("Tags_GetSelectedTag");
     return APLRes_Success;
 }
 
@@ -1951,15 +1951,35 @@ static void BuildChatPrefix(int client, char[] output, int maxlen)
 {
     output[0] = '\0';
 
-    if (GetFeatureStatus(FeatureType_Native, "Tags_GetTag") != FeatureStatus_Available)
+    if (GetFeatureStatus(FeatureType_Native, "Tags_GetSelectedTag") != FeatureStatus_Available)
     {
         return;
     }
 
-    if (!Tags_GetTag(client, "", output, maxlen) || !output[0])
+    if (!Tags_GetSelectedTag(client, output, maxlen) || !output[0])
     {
         output[0] = '\0';
     }
+}
+
+static void BuildDisplayChatPrefix(int client, char[] output, int maxlen)
+{
+    output[0] = '\0';
+
+    char rawPrefix[CHAT_PREFIX_MAXLEN];
+    BuildChatPrefix(client, rawPrefix, sizeof(rawPrefix));
+    if (!rawPrefix[0])
+    {
+        return;
+    }
+
+    if (rawPrefix[0] == '[')
+    {
+        strcopy(output, maxlen, rawPrefix);
+        return;
+    }
+
+    Format(output, maxlen, "[{gold}%s{default}]", rawPrefix);
 }
 
 static void BuildColorOnlyClientName(int client, char[] output, int maxlen)
@@ -1984,7 +2004,7 @@ static void BuildChatDisplayName(int client, char[] output, int maxlen)
     output[0] = '\0';
 
     char chatPrefix[CHAT_PREFIX_MAXLEN];
-    BuildChatPrefix(client, chatPrefix, sizeof(chatPrefix));
+    BuildDisplayChatPrefix(client, chatPrefix, sizeof(chatPrefix));
 
     char renderedName[256];
     BuildRenderedClientName(client, renderedName, sizeof(renderedName));

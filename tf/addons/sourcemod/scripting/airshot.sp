@@ -146,6 +146,7 @@ public Action Timer_BroadcastAirshot(Handle timer, any userid)
 	CPrintToChatAll("%s%N{default} airshot %s%N{default}!", attackerColorTag, attacker, victimColorTag, victim);
 	if (!IsPlayerAlive(victim))
 	{
+		ApplyBonusPoints(attacker, 1, true, true, 1.0, "airshot_kill");
 		if (g_bSaySoundsAvailable)
 		{
 			SaySounds_PlayCommand(0, SAYSOUND_AIRSHOT_COMMAND);

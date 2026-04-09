@@ -1101,7 +1101,13 @@ public Action OnTakeDamage(client, &attacker, &inflictor, &Float:damage, &damage
 					return Plugin_Changed;
 				}
 			}
-		} else if (validWeapon && TF2CustAttr_GetInt(weapon, "twin barrel attributes") != 0) {
+		}
+
+		if (!validWeapon) {
+			return Plugin_Continue;
+		}
+
+		if (TF2CustAttr_GetInt(weapon, "twin barrel attributes") != 0) {
 			float vecAngles[3];
 			float vecVelocity[3];
 
@@ -1115,13 +1121,17 @@ public Action OnTakeDamage(client, &attacker, &inflictor, &Float:damage, &damage
 
 			TeleportEntity(client, NULL_VECTOR, NULL_VECTOR, vecVelocity);
 			return Plugin_Changed;
-		} else if (validWeapon && TF2CustAttr_GetInt(weapon, "shock therapy attributes") != 0) {
+		} else if (TF2CustAttr_GetInt(weapon, "shock therapy attributes") != 0) {
 			damage = float(tf2_players[attacker].shockCharge * 100 / 30);
 			tf2_players[attacker].shockCharge = 0;
 			EmitAmbientSound(SOUND_NEON_SIGN, damagePosition, client, SNDLEVEL_NORMAL);
 			return Plugin_Changed;
-		} else if (validWeapon && TF2CustAttr_GetInt(weapon, "hitscan ignite targets") != 0) {
-			if (GetClientDistance(client, attacker) <= 1024.0) {
+		} else if (TF2CustAttr_GetInt(weapon, "hitscan ignite targets") != 0) {
+			float victimPos[3];
+			float attackerPos[3];
+			GetClientAbsOrigin(client, victimPos);
+			GetClientAbsOrigin(attacker, attackerPos);
+			if (GetVectorDistance(victimPos, attackerPos) <= 1024.0) {
 				TF2_IgnitePlayer(client, attacker, 4.0);
 				return Plugin_Changed;
 			}
@@ -1174,7 +1184,7 @@ public Action OnTraceAttack(victim, &attacker, &inflictor, &Float:damage, &damag
     return Plugin_Continue;
 }
 
-public Action OnPlayerRunCmd(
+/*public Action OnPlayerRunCmd(
 	int client, int& buttons, int& impulse, float vel[3], float angles[3],
 	int& weapon, int& subtype, int& cmdnum, int& tickcount, int& seed, int mouse[2]
 ) {
@@ -1206,7 +1216,7 @@ public Action OnPlayerRunCmd(
 	}
 	
 	return Plugin_Continue;
-}
+}*/
 
 public Action OnTakeDamageAlive(
 	int victim, int& attacker, int& inflictor, float& damage, int& damage_type,

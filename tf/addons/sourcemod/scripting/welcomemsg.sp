@@ -222,7 +222,7 @@ public OnPluginStart()
 // Welcome message components
 static const char g_WelcomeMsg[][] = {
     "{peachpuff}Welcome to {unique}Gensokyo{peachpuff} %N!",
-    "{peachpuff}This server has new weapons and stuff like that; use {lightskyblue}!info{}",
+    "{peachpuff}This server has new weapons and stuff like that; use {lightskyblue}!info",
     "{peachpuff}Read more with {peachpuff} or see our group at {unique}!steam"
 };
 

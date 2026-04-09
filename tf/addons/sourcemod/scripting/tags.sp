@@ -37,6 +37,7 @@ public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int err_max)
 {
     RegPluginLibrary("tags");
     CreateNative("Tags_GetTag", Native_Tags_GetTag);
+    CreateNative("Tags_GetSelectedTag", Native_Tags_GetSelectedTag);
     MarkNativeAsOptional("CustomHats_GetPrefix");
     MarkNativeAsOptional("Clans_GetTags");
     return APLRes_Success;
@@ -48,6 +49,7 @@ public void OnPluginStart()
     AutoExecConfig(true, "tags");
 
     RegConsoleCmd("sm_tag", Command_TagMenu, "Open the chat tag selection menu.");
+    RegConsoleCmd("sm_tags", Command_TagMenu, "Open the chat tag selection menu.");
 
     for (int client = 1; client <= MaxClients; client++)
     {
@@ -113,6 +115,11 @@ public void SQL_OnDatabaseConnected(Database db, const char[] error, any data)
 
     g_Database = db;
     g_bDatabaseReady = false;
+
+    if (!g_Database.SetCharset("utf8mb4"))
+    {
+        LogError("[Tags] Failed to set utf8mb4 charset");
+    }
 
     char query[384];
     FormatEx(query, sizeof(query),
@@ -575,5 +582,27 @@ public any Native_Tags_GetTag(Handle plugin, int numParams)
     }
 
     SetNativeString(3, buffer, maxlen, true);
+    return found;
+}
+
+public any Native_Tags_GetSelectedTag(Handle plugin, int numParams)
+{
+    int client = GetNativeCell(1);
+    int maxlen = GetNativeCell(3);
+
+    char buffer[TAG_VALUE_MAXLEN];
+    buffer[0] = '\0';
+
+    bool found = false;
+    if (client > 0 && client <= MaxClients && IsClientInGame(client) && !IsFakeClient(client))
+    {
+        if (g_bTagLoaded[client] && g_SelectedTags[client][0])
+        {
+            strcopy(buffer, sizeof(buffer), g_SelectedTags[client]);
+            found = true;
+        }
+    }
+
+    SetNativeString(2, buffer, maxlen, true);
     return found;
 }

@@ -2860,7 +2860,7 @@ public void SQL_OnClanCreateValidate(Database db, DBResultSet results, const cha
         return;
     }
 
-    if (!WhaleTracker_SpendBonusPoints(client, CLAN_CREATE_COST))
+    if (!ApplyBonusPoints(client, -CLAN_CREATE_COST, false, false, 1.0, "", 0, 0.0))
     {
         PrintToChat(client, "[Clans] You need %d bonus points to create a clan.", CLAN_CREATE_COST);
         return;
@@ -2869,7 +2869,7 @@ public void SQL_OnClanCreateValidate(Database db, DBResultSet results, const cha
     char steamid64[STEAMID64_MAXLEN];
     if (!GetClientSteam64(client, steamid64, sizeof(steamid64)))
     {
-        WhaleTracker_GiveBonusPoints(client, CLAN_CREATE_COST);
+        ApplyBonusPoints(client, CLAN_CREATE_COST, false, false, 1.0, "", 0, 0.0);
         PrintToChat(client, "[Clans] Could not read your SteamID64.");
         return;
     }
@@ -2917,7 +2917,7 @@ public void SQLTxn_OnCreateClanFailure(Database db, any data, int numQueries, co
     int client = GetClientOfUserId(userId);
     if (client > 0 && IsClientInGame(client))
     {
-        WhaleTracker_GiveBonusPoints(client, CLAN_CREATE_COST);
+        ApplyBonusPoints(client, CLAN_CREATE_COST, false, false, 1.0, "", 0, 0.0);
 
         if (StrContains(error, "Duplicate", false) != -1 || StrContains(error, "UNIQUE", false) != -1)
         {
@@ -3124,7 +3124,7 @@ public void SQLTxn_OnDeleteClanSuccess(Database db, any data, int numQueries, DB
     {
         if (refundOwner)
         {
-            WhaleTracker_GiveBonusPoints(client, CLAN_CREATE_COST);
+            ApplyBonusPoints(client, CLAN_CREATE_COST, false, false, 1.0, "", 0, 0.0);
         }
 
         PrintToChat(client, "[Clans] Clan %d deleted.", clanId);
