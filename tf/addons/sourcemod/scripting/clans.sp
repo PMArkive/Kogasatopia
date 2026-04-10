@@ -4268,36 +4268,37 @@ public void SQL_OnClanInviteCreated(Database db, DBResultSet results, const char
     AnnounceClanInviteToMembers(clanId, clanName, inviterSteam, targetSteam);
 }
 
-void StartClanKickTarget(int client, int target)
+void StartClanKickSteam64(int client, const char[] targetSteam)
 {
     if (!EnsureDatabaseReady(client))
     {
         return;
     }
 
-    if (target <= 0 || target > MaxClients || !IsClientInGame(target) || IsFakeClient(target))
+    if (!targetSteam[0])
     {
         PrintToChat(client, "[Clans] That player is not available.");
         return;
     }
 
-    if (target == client)
-    {
-        PrintToChat(client, "[Clans] Use sm_clanleave to leave your clan.");
-        return;
-    }
-
     char actorSteam[STEAMID64_MAXLEN];
-    char targetSteam[STEAMID64_MAXLEN];
-    if (!GetClientSteam64(client, actorSteam, sizeof(actorSteam)) || !GetClientSteam64(target, targetSteam, sizeof(targetSteam)))
+    if (!GetClientSteam64(client, actorSteam, sizeof(actorSteam)))
     {
         PrintToChat(client, "[Clans] Failed to read a SteamID64.");
         return;
     }
 
+    if (StrEqual(actorSteam, targetSteam, false))
+    {
+        PrintToChat(client, "[Clans] Use sm_clanleave to leave your clan.");
+        return;
+    }
+
+    int target = FindClientBySteam64(targetSteam);
+
     DataPack pack = new DataPack();
     pack.WriteCell(GetClientUserId(client));
-    pack.WriteCell(GetClientUserId(target));
+    pack.WriteCell(target > 0 ? GetClientUserId(target) : 0);
     pack.WriteString(targetSteam);
 
     GetClanByPlayer(actorSteam, SQL_OnClanKickActorContext, pack);
@@ -4389,8 +4390,7 @@ public void SQL_OnClanKickMenuMembers(Database db, DBResultSet results, const ch
         char memberSteam[STEAMID64_MAXLEN];
         results.FetchString(0, memberSteam, sizeof(memberSteam));
 
-        int target = FindClientBySteam64(memberSteam);
-        if (target <= 0 || target == client)
+        if (FindClientBySteam64(memberSteam) == client)
         {
             continue;
         }
@@ -4420,7 +4420,7 @@ public void SQL_OnClanKickMenuMembers(Database db, DBResultSet results, const ch
 
     if (!added)
     {
-        menu.AddItem("none", "No kickable online members", ITEMDRAW_DISABLED);
+        menu.AddItem("none", "No kickable members", ITEMDRAW_DISABLED);
     }
 
     menu.Display(client, CLAN_MENU_TIME);
@@ -4444,15 +4444,7 @@ public int MenuHandler_ClanKickTarget(Menu menu, MenuAction action, int param1, 
         char steamid64[STEAMID64_MAXLEN];
         menu.GetItem(param2, steamid64, sizeof(steamid64));
 
-        int target = FindClientBySteam64(steamid64);
-        if (target <= 0)
-        {
-            PrintToChat(param1, "[Clans] That player is no longer available.");
-            ShowClanKickTargetMenu(param1);
-            return 0;
-        }
-
-        StartClanKickTarget(param1, target);
+        StartClanKickSteam64(param1, steamid64);
     }
 
     return 0;
@@ -4477,17 +4469,179 @@ public Action Command_ClanKick(int client, int args)
         return Plugin_Handled;
     }
 
-    char arg[64];
-    GetCmdArg(1, arg, sizeof(arg));
-
-    int target = FindTarget(client, arg, true, false);
-    if (target <= 0)
+    char actorSteam[STEAMID64_MAXLEN];
+    if (!GetClientSteam64(client, actorSteam, sizeof(actorSteam)))
     {
+        PrintToChat(client, "[Clans] Could not read your SteamID64.");
         return Plugin_Handled;
     }
 
-    StartClanKickTarget(client, target);
+    char query[64];
+    GetCmdArgString(query, sizeof(query));
+    StripQuotes(query);
+    TrimString(query);
+
+    if (!query[0])
+    {
+        ReplyToCommand(client, "[Clans] Usage: sm_clankick <target>");
+        return Plugin_Handled;
+    }
+
+    DataPack pack = new DataPack();
+    pack.WriteCell(GetClientUserId(client));
+    pack.WriteString(actorSteam);
+    pack.WriteString(query);
+
+    GetClanByPlayer(actorSteam, SQL_OnClanKickCommandContext, pack);
     return Plugin_Handled;
+}
+
+public void SQL_OnClanKickCommandContext(Database db, DBResultSet results, const char[] error, any data)
+{
+    DataPack pack = view_as<DataPack>(data);
+    pack.Reset();
+
+    int userId = pack.ReadCell();
+    char actorSteam[STEAMID64_MAXLEN];
+    char query[64];
+    pack.ReadString(actorSteam, sizeof(actorSteam));
+    pack.ReadString(query, sizeof(query));
+    delete pack;
+
+    int client = GetClientOfUserId(userId);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Kick command context failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to look up your clan.");
+        return;
+    }
+
+    if (results == null || !results.FetchRow())
+    {
+        PrintToChat(client, "[Clans] You are not in a clan.");
+        return;
+    }
+
+    int clanId = results.FetchInt(ClanByPlayerCol_Id);
+    ClanRank actorRank = view_as<ClanRank>(results.FetchInt(ClanByPlayerCol_Rank));
+
+    if (actorRank < ClanRank_Officer)
+    {
+        PrintToChat(client, "[Clans] Only officers and owners can kick members.");
+        return;
+    }
+
+    DataPack next = new DataPack();
+    next.WriteCell(userId);
+    next.WriteCell(view_as<int>(actorRank));
+    next.WriteString(actorSteam);
+    next.WriteString(query);
+
+    GetClanMembers(clanId, SQL_OnClanKickCommandMembers, next);
+}
+
+public void SQL_OnClanKickCommandMembers(Database db, DBResultSet results, const char[] error, any data)
+{
+    DataPack pack = view_as<DataPack>(data);
+    pack.Reset();
+
+    int userId = pack.ReadCell();
+    ClanRank actorRank = view_as<ClanRank>(pack.ReadCell());
+    char actorSteam[STEAMID64_MAXLEN];
+    char query[64];
+    pack.ReadString(actorSteam, sizeof(actorSteam));
+    pack.ReadString(query, sizeof(query));
+    delete pack;
+
+    int client = GetClientOfUserId(userId);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Kick command member query failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to load kick targets.");
+        return;
+    }
+
+    char exactSteam[STEAMID64_MAXLEN];
+    char partialSteam[STEAMID64_MAXLEN];
+    exactSteam[0] = '\0';
+    partialSteam[0] = '\0';
+
+    int exactCount = 0;
+    int partialCount = 0;
+
+    while (results != null && results.FetchRow())
+    {
+        char memberSteam[STEAMID64_MAXLEN];
+        results.FetchString(0, memberSteam, sizeof(memberSteam));
+
+        if (StrEqual(memberSteam, actorSteam, false))
+        {
+            continue;
+        }
+
+        ClanRank targetRank = view_as<ClanRank>(results.FetchInt(1));
+        if (targetRank >= ClanRank_Owner)
+        {
+            continue;
+        }
+
+        if (actorRank == ClanRank_Officer && targetRank >= ClanRank_Officer)
+        {
+            continue;
+        }
+
+        char targetName[MAX_NAME_LENGTH];
+        ResolvePlayerDisplayName(memberSteam, targetName, sizeof(targetName));
+
+        if (StrEqual(memberSteam, query, false) || StrEqual(targetName, query, false))
+        {
+            exactCount++;
+            if (exactCount == 1)
+            {
+                strcopy(exactSteam, sizeof(exactSteam), memberSteam);
+            }
+            continue;
+        }
+
+        if (StrContains(memberSteam, query, false) != -1 || StrContains(targetName, query, false) != -1)
+        {
+            partialCount++;
+            if (partialCount == 1)
+            {
+                strcopy(partialSteam, sizeof(partialSteam), memberSteam);
+            }
+        }
+    }
+
+    if (exactCount > 1 || (exactCount == 0 && partialCount > 1))
+    {
+        PrintToChat(client, "[Clans] Multiple clan members matched that query.");
+        return;
+    }
+
+    if (exactCount == 1)
+    {
+        StartClanKickSteam64(client, exactSteam);
+        return;
+    }
+
+    if (partialCount == 1)
+    {
+        StartClanKickSteam64(client, partialSteam);
+        return;
+    }
+
+    PrintToChat(client, "[Clans] No clan member matched that query.");
 }
 
 public void SQL_OnClanKickActorContext(Database db, DBResultSet results, const char[] error, any data)
@@ -4638,6 +4792,10 @@ public void SQL_OnClanKickSuccess(Database db, any data, int numQueries, DBResul
 
     int actor = GetClientOfUserId(actorUserId);
     int target = GetClientOfUserId(targetUserId);
+    if (target <= 0 || !IsClientInGame(target))
+    {
+        target = FindClientBySteam64(targetSteam);
+    }
 
     char targetName[MAX_NAME_LENGTH];
     ResolvePlayerDisplayName(targetSteam, targetName, sizeof(targetName));
