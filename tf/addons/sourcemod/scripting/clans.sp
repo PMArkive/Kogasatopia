@@ -41,6 +41,7 @@ enum PromptState
 {
     Prompt_None = 0,
     Prompt_ClanCreateName,
+    Prompt_ClanRenameName,
     Prompt_ClanLeaveConfirm,
     Prompt_ClanTagChoice,
     Prompt_ClanTagInput,
@@ -240,6 +241,7 @@ public void OnPluginStart()
     RegConsoleCmd("sm_claninfo", Command_ClanInfo, "Show clan info.");
     RegConsoleCmd("sm_claninvites", Command_ClanInvites, "Show pending clan invites.");
     RegConsoleCmd("sm_clandesc", Command_ClanDesc, "Set your clan description.");
+    RegConsoleCmd("sm_clanrename", Command_ClanRename, "Rename your clan.");
     RegAdminCmd("sm_clansetdesc", Command_ClanSetDesc, ADMFLAG_GENERIC, "Set any clan description.");
 
     /* Extra owner utility so open-clan menus are actually usable. */
@@ -1603,6 +1605,24 @@ void SetClanDescription(int clanId, const char[] description, SQLQueryCallback c
     g_Database.Query(callback, query, data);
 }
 
+void SetClanName(int clanId, const char[] name, SQLQueryCallback callback, any data = 0)
+{
+    if (!EnsureDatabaseReady())
+    {
+        return;
+    }
+
+    char escapedName[SQL_CLAN_NAME_MAXLEN];
+    EscapeSql(name, escapedName, sizeof(escapedName));
+
+    char query[384];
+    FormatEx(query, sizeof(query),
+        "UPDATE clans SET name = '%s' WHERE id = %d",
+        escapedName,
+        clanId);
+    g_Database.Query(callback, query, data);
+}
+
 void SetClanSubTag(int clanId, const char[] steamid64, const char[] tag, SQLQueryCallback callback, any data = 0)
 {
     if (!EnsureDatabaseReady())
@@ -1772,6 +1792,19 @@ public Action CommandListener_Say(int client, const char[] command, int argc)
 
         g_PromptState[client] = Prompt_None;
         HandleClanCreateInput(client, text);
+        return Plugin_Handled;
+    }
+    else if (g_PromptState[client] == Prompt_ClanRenameName)
+    {
+        if (StrEqual(text, "/cancel", false))
+        {
+            g_PromptState[client] = Prompt_None;
+            PrintToChat(client, "[Clans] Clan rename cancelled.");
+            return Plugin_Handled;
+        }
+
+        g_PromptState[client] = Prompt_None;
+        HandleClanRenameInput(client, text);
         return Plugin_Handled;
     }
     else if (g_PromptState[client] == Prompt_ClanLeaveConfirm)
@@ -2041,6 +2074,7 @@ void ShowClanMainMenu(int client, int clanId, ClanRank rank, const char[] clanNa
 
         if (rank >= ClanRank_Owner)
         {
+            menu.AddItem("rename", "Rename clan");
             menu.AddItem("tag", "Clan tag");
             menu.AddItem("desc", "Clan description");
             menu.AddItem("open", isOpen ? "Close clan joining" : "Open clan joining");
@@ -2390,6 +2424,10 @@ public int MenuHandler_ClanMain(Menu menu, MenuAction action, int param1, int pa
         {
             StartClanTagPrompt(client);
         }
+        else if (StrEqual(info, "rename", false))
+        {
+            Command_ClanRename(client, 0);
+        }
         else if (StrEqual(info, "desc", false))
         {
             Command_ClanDesc(client, 0);
@@ -2464,6 +2502,30 @@ public Action Command_ClanDesc(int client, int args)
     }
 
     GetClanByPlayer(steamid64, SQL_OnClanDescPromptContext, GetClientUserId(client));
+    return Plugin_Handled;
+}
+
+public Action Command_ClanRename(int client, int args)
+{
+    if (client <= 0)
+    {
+        ReplyToCommand(client, "[Clans] This command can only be used by players.");
+        return Plugin_Handled;
+    }
+
+    if (!EnsureDatabaseReady(client))
+    {
+        return Plugin_Handled;
+    }
+
+    char steamid64[STEAMID64_MAXLEN];
+    if (!GetClientSteam64(client, steamid64, sizeof(steamid64)))
+    {
+        PrintToChat(client, "[Clans] Could not read your SteamID64.");
+        return Plugin_Handled;
+    }
+
+    GetClanByPlayer(steamid64, SQL_OnClanRenamePromptContext, GetClientUserId(client));
     return Plugin_Handled;
 }
 
@@ -2623,6 +2685,37 @@ public void SQL_OnClanDescPromptContext(Database db, DBResultSet results, const 
 
     g_PromptState[client] = Prompt_ClanDescInput;
     PrintToChat(client, "[Clans] Type your clan description in chat. Max length: %d. Type /cancel to abort.", CLAN_DESC_MAXLEN);
+}
+
+public void SQL_OnClanRenamePromptContext(Database db, DBResultSet results, const char[] error, any data)
+{
+    int client = GetClientOfUserId(data);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Clan rename prompt context failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to look up your clan.");
+        return;
+    }
+
+    if (results == null || !results.FetchRow())
+    {
+        PrintToChat(client, "[Clans] You are not in a clan.");
+        return;
+    }
+
+    if (view_as<ClanRank>(results.FetchInt(ClanByPlayerCol_Rank)) < ClanRank_Owner)
+    {
+        PrintToChat(client, "[Clans] Only the clan owner can rename the clan.");
+        return;
+    }
+
+    g_PromptState[client] = Prompt_ClanRenameName;
+    PrintToChat(client, "[Clans] Type the new clan name in chat. Type /cancel to abort.");
 }
 
 public void SQL_OnClanDescContext(Database db, DBResultSet results, const char[] error, any data)
@@ -3137,6 +3230,52 @@ void HandleClanCreateInput(int client, const char[] name)
     g_Database.Query(SQL_OnClanCreateValidate, query, pack);
 }
 
+void HandleClanRenameInput(int client, const char[] name)
+{
+    if (!EnsureDatabaseReady(client))
+    {
+        return;
+    }
+
+    char clanName[CLAN_NAME_MAXLEN + 1];
+    strcopy(clanName, sizeof(clanName), name);
+    TrimString(clanName);
+
+    if (!ValidateClanName(clanName))
+    {
+        PrintToChat(client, "[Clans] Clan names must be between 1 and %d characters.", CLAN_NAME_MAXLEN);
+        return;
+    }
+
+    char steamid64[STEAMID64_MAXLEN];
+    if (!GetClientSteam64(client, steamid64, sizeof(steamid64)))
+    {
+        PrintToChat(client, "[Clans] Could not read your SteamID64.");
+        return;
+    }
+
+    char escapedSteam[SQL_STEAMID64_MAXLEN];
+    char escapedName[SQL_CLAN_NAME_MAXLEN];
+    EscapeSql(steamid64, escapedSteam, sizeof(escapedSteam));
+    EscapeSql(clanName, escapedName, sizeof(escapedName));
+
+    char query[512];
+    FormatEx(query, sizeof(query),
+        "SELECT c.id, cm.rank, "
+        ... "(SELECT COUNT(1) FROM clans WHERE name = '%s' AND id != c.id) AS name_taken "
+        ... "FROM clan_members cm "
+        ... "INNER JOIN clans c ON c.id = cm.clan_id "
+        ... "WHERE cm.steamid64 = '%s' LIMIT 1",
+        escapedName,
+        escapedSteam);
+
+    DataPack pack = new DataPack();
+    pack.WriteCell(GetClientUserId(client));
+    pack.WriteString(clanName);
+
+    g_Database.Query(SQL_OnClanRenameValidate, query, pack);
+}
+
 public void SQL_OnClanTagPromptContext(Database db, DBResultSet results, const char[] error, any data)
 {
     int client = GetClientOfUserId(data);
@@ -3290,6 +3429,56 @@ public void SQL_OnClanCreateValidate(Database db, DBResultSet results, const cha
     CreateClan(steamid64, clanName, userId);
 }
 
+public void SQL_OnClanRenameValidate(Database db, DBResultSet results, const char[] error, any data)
+{
+    DataPack pack = view_as<DataPack>(data);
+    pack.Reset();
+
+    int userId = pack.ReadCell();
+    char clanName[CLAN_NAME_MAXLEN + 1];
+    pack.ReadString(clanName, sizeof(clanName));
+    delete pack;
+
+    int client = GetClientOfUserId(userId);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Rename validation failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to validate the clan rename.");
+        return;
+    }
+
+    if (results == null || !results.FetchRow())
+    {
+        PrintToChat(client, "[Clans] You are not in a clan.");
+        return;
+    }
+
+    if (view_as<ClanRank>(results.FetchInt(1)) < ClanRank_Owner)
+    {
+        PrintToChat(client, "[Clans] Only the clan owner can rename the clan.");
+        return;
+    }
+
+    if (results.FetchInt(2) > 0)
+    {
+        PrintToChat(client, "[Clans] That clan name is already taken.");
+        return;
+    }
+
+    int clanId = results.FetchInt(0);
+
+    DataPack next = new DataPack();
+    next.WriteCell(userId);
+    next.WriteString(clanName);
+
+    SetClanName(clanId, clanName, SQL_OnClanRenameSet, next);
+}
+
 public void SQLTxn_OnCreateClanSuccess(Database db, any data, int numQueries, DBResultSet[] results, any[] queryData)
 {
     DataPack pack = view_as<DataPack>(data);
@@ -3318,6 +3507,40 @@ public void SQLTxn_OnCreateClanSuccess(Database db, any data, int numQueries, DB
     {
         PrintToChat(client, "[Clans] Clan '%s' created successfully. (ID %d)", clanName, clanId);
     }
+}
+
+public void SQL_OnClanRenameSet(Database db, DBResultSet results, const char[] error, any data)
+{
+    DataPack pack = view_as<DataPack>(data);
+    pack.Reset();
+
+    int userId = pack.ReadCell();
+    char clanName[CLAN_NAME_MAXLEN + 1];
+    pack.ReadString(clanName, sizeof(clanName));
+    delete pack;
+
+    int client = GetClientOfUserId(userId);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Rename set failed: %s", error);
+
+        if (StrContains(error, "Duplicate", false) != -1 || StrContains(error, "UNIQUE", false) != -1)
+        {
+            PrintToChat(client, "[Clans] That clan name is already taken.");
+        }
+        else
+        {
+            PrintToChat(client, "[Clans] Failed to rename the clan.");
+        }
+        return;
+    }
+
+    PrintToChat(client, "[Clans] Clan renamed to '%s'.", clanName);
 }
 
 public void SQLTxn_OnCreateClanFailure(Database db, any data, int numQueries, const char[] error, int failIndex, any[] queryData)
