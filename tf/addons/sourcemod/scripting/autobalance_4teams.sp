@@ -5,6 +5,7 @@
 #include <clientprefs>
 #include <morecolors>
 #include <tf2_stocks>
+#include <whaletracker_api>
 
 native int FilterAlerts_MarkAutobalance(int client);
 
@@ -48,6 +49,7 @@ public Plugin myinfo =
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
 {
     MarkNativeAsOptional("FilterAlerts_MarkAutobalance");
+    MarkNativeAsOptional("WhaleTracker_IsCurrentRoundMvp");
     return APLRes_Success;
 }
 
@@ -427,6 +429,7 @@ static bool IsEligiblePlayer(int client, int team)
     if (!IsClientInGame(client) || IsFakeClient(client)) return false;
     if (GetClientTeam(client) != team) return false;
     if (IsClientImmune(client)) return false;
+    if (IsClientCurrentRoundMvpSafe(client)) return false;
 
     return true;
 }
@@ -437,8 +440,19 @@ static bool IsEligiblePlayerForce(int client, int team)
     if (!IsClientInGame(client) || IsFakeClient(client)) return false;
     if (GetClientTeam(client) != team) return false;
     if (IsClientImmune(client)) return false;
+    if (IsClientCurrentRoundMvpSafe(client)) return false;
 
     return true;
+}
+
+static bool IsClientCurrentRoundMvpSafe(int client)
+{
+    if (GetFeatureStatus(FeatureType_Native, "WhaleTracker_IsCurrentRoundMvp") != FeatureStatus_Available)
+    {
+        return false;
+    }
+
+    return WhaleTracker_IsCurrentRoundMvp(client);
 }
 
 static int GetSimpleSelectionPriority(int client)
