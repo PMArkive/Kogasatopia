@@ -12,7 +12,7 @@
 
 #define CLAN_CREATE_COST          250
 #define INVITE_EXPIRE_SECONDS     604800
-#define CLAN_NAME_MAXLEN          64
+#define CLAN_NAME_MAXLEN          24
 #define CLAN_DESC_MAXLEN          128
 #define CLAN_TAG_MAXLEN           64
 #define CLAN_TAG_STORE_MAXLEN     (CLAN_TAG_MAXLEN + 1)
@@ -25,7 +25,7 @@
 #define CLAN_SUB_TAG_STORE_MAXLEN (CLAN_SUB_TAG_MAXLEN + 1)
 #define SQL_CLAN_SUB_TAG_MAXLEN   ((CLAN_SUB_TAG_MAXLEN * 2) + 1)
 #define CLAN_TAG_FORMAT_OVERHEAD  17 // Stored tag format: "[{gold}" + raw tag + "{default}]"
-#define CLAN_TAG_PLAYER_MAXLEN    16
+#define CLAN_TAG_PLAYER_MAXLEN    32
 #define CLAN_TAG_ADMIN_MAXLEN     64
 #define INVITE_CLEANUP_INTERVAL   300.0
 #define CLAN_MENU_TIME            MENU_TIME_FOREVER
@@ -93,6 +93,99 @@ enum ClanMemberListCols
     ClanMemberListCol_Rank,
     ClanMemberListCol_NameColor
 };
+
+static void StripClanChatPrefix(const char[] input, char[] output, int maxlen)
+{
+    static const char plainPrefix[] = "[Clans] ";
+    static const char plainPrefixNoSpace[] = "[Clans]";
+    static const char defaultPrefix[] = "{default}[Clans] ";
+    static const char defaultPrefixNoSpace[] = "{default}[Clans]";
+    static const char goldPrefix[] = "{gold}[Clans]{default} ";
+    static const char goldPrefixNoSpace[] = "{gold}[Clans]{default}";
+
+    int offset = 0;
+    if (StrContains(input, goldPrefix, false) == 0)
+    {
+        offset = sizeof(goldPrefix) - 1;
+    }
+    else if (StrContains(input, goldPrefixNoSpace, false) == 0)
+    {
+        offset = sizeof(goldPrefixNoSpace) - 1;
+    }
+    else if (StrContains(input, defaultPrefix, false) == 0)
+    {
+        offset = sizeof(defaultPrefix) - 1;
+    }
+    else if (StrContains(input, defaultPrefixNoSpace, false) == 0)
+    {
+        offset = sizeof(defaultPrefixNoSpace) - 1;
+    }
+    else if (StrContains(input, plainPrefix, false) == 0)
+    {
+        offset = sizeof(plainPrefix) - 1;
+    }
+    else if (StrContains(input, plainPrefixNoSpace, false) == 0)
+    {
+        offset = sizeof(plainPrefixNoSpace) - 1;
+    }
+
+    int i = 0;
+    while (i < maxlen - 1 && input[offset + i] != '\0')
+    {
+        output[i] = input[offset + i];
+        i++;
+    }
+    output[i] = '\0';
+    TrimString(output);
+}
+
+stock void ClansPrintToChatWrapped(int client, const char[] fmt, any ...)
+{
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    char buffer[512];
+    char message[512];
+    VFormat(buffer, sizeof(buffer), fmt, 3);
+    StripClanChatPrefix(buffer, message, sizeof(message));
+    CPrintToChat(client, "{gold}[Clans]{default} %s", message);
+}
+
+stock void ClansReplyToCommandWrapped(int client, const char[] fmt, any ...)
+{
+    char buffer[512];
+    char message[512];
+    VFormat(buffer, sizeof(buffer), fmt, 3);
+    StripClanChatPrefix(buffer, message, sizeof(message));
+
+    if (client > 0 && IsClientInGame(client))
+    {
+        CPrintToChat(client, "{gold}[Clans]{default} %s", message);
+        return;
+    }
+
+    ReplyToCommand(client, "[Clans] %s", message);
+}
+
+stock void ClansCPrintToChatWrapped(int client, const char[] fmt, any ...)
+{
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    char buffer[512];
+    char message[512];
+    VFormat(buffer, sizeof(buffer), fmt, 3);
+    StripClanChatPrefix(buffer, message, sizeof(message));
+    CPrintToChat(client, "{gold}[Clans]{default} %s", message);
+}
+
+#define PrintToChat ClansPrintToChatWrapped
+#define ReplyToCommand ClansReplyToCommandWrapped
+#define CPrintToChat ClansCPrintToChatWrapped
 
 public Plugin myinfo =
 {
