@@ -2212,6 +2212,7 @@ public void SQL_OnClansListMenu(Database db, DBResultSet results, const char[] e
                 FormatEx(display, sizeof(display), "%s (%d)", name, memberCount);
             }
 
+            CRemoveTags(display, sizeof(display));
             menu.AddItem(info, display);
             added = true;
         }
