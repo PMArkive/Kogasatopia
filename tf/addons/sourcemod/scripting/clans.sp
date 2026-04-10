@@ -3270,7 +3270,7 @@ public void SQL_OnClanMembersList(Database db, DBResultSet results, const char[]
     CPrintToChat(client, "{default}[Clans] Members of %s:", clanName);
 
     ArrayList onlineMembers = new ArrayList(ByteCountToCells(512));
-    bool printedAny = false;
+    ArrayList offlineMembers = new ArrayList(ByteCountToCells(512));
 
     if (results != null)
     {
@@ -3283,19 +3283,16 @@ public void SQL_OnClanMembersList(Database db, DBResultSet results, const char[]
 
             char line[512];
             BuildClanMemberDisplayLine(steamid64, view_as<ClanRank>(results.FetchInt(ClanMemberListCol_Rank)), nameColor, line, sizeof(line));
-            CPrintToChat(client, "{default}[Clans] %s", line);
-            printedAny = true;
 
             if (FindClientBySteam64(steamid64) > 0)
             {
                 onlineMembers.PushString(line);
             }
+            else
+            {
+                offlineMembers.PushString(line);
+            }
         }
-    }
-
-    if (!printedAny)
-    {
-        CPrintToChat(client, "{default}[Clans] None.");
     }
 
     CPrintToChat(client, "{default}[Clans] Online members:");
@@ -3303,18 +3300,35 @@ public void SQL_OnClanMembersList(Database db, DBResultSet results, const char[]
     if (onlineMembers.Length <= 0)
     {
         CPrintToChat(client, "{default}[Clans] None.");
-        delete onlineMembers;
-        return;
+    }
+    else
+    {
+        char line[512];
+        for (int i = 0; i < onlineMembers.Length; i++)
+        {
+            onlineMembers.GetString(i, line, sizeof(line));
+            CPrintToChat(client, "{default}[Clans] %s", line);
+        }
     }
 
-    char line[512];
-    for (int i = 0; i < onlineMembers.Length; i++)
+    CPrintToChat(client, "{default}[Clans] Offline members:");
+
+    if (offlineMembers.Length <= 0)
     {
-        onlineMembers.GetString(i, line, sizeof(line));
-        CPrintToChat(client, "{default}[Clans] %s", line);
+        CPrintToChat(client, "{default}[Clans] None.");
+    }
+    else
+    {
+        char line[512];
+        for (int i = 0; i < offlineMembers.Length; i++)
+        {
+            offlineMembers.GetString(i, line, sizeof(line));
+            CPrintToChat(client, "{default}[Clans] %s", line);
+        }
     }
 
     delete onlineMembers;
+    delete offlineMembers;
 }
 
 void StartSetClanSubTagFromInput(int client, const char[] input)
