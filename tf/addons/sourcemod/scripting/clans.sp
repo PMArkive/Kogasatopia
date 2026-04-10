@@ -1327,7 +1327,7 @@ void GetClanInfoById(int clanId, SQLQueryCallback callback, any data = 0)
 
     char query[1024];
     FormatEx(query, sizeof(query),
-        "SELECT c.name, c.tag, c.owner, COALESCE(c.`desc`, ''), ("
+        "SELECT c.id, c.name, c.tag, c.owner, COALESCE(c.`desc`, ''), ("
         ... "SELECT COUNT(1) FROM clan_members cm WHERE cm.clan_id = c.id"
         ... ") + ("
         ... "SELECT COUNT(1) "
@@ -1340,6 +1340,24 @@ void GetClanInfoById(int clanId, SQLQueryCallback callback, any data = 0)
         ... "LIMIT 1",
         clanId);
     g_Database.Query(callback, query, data);
+}
+
+void QueryClanMembersListForClient(int userId, int clanId, const char[] clanName)
+{
+    char query[512];
+    FormatEx(query, sizeof(query),
+        "SELECT cm.steamid64, cm.rank, COALESCE(fnc.color, '') "
+        ... "FROM clan_members cm "
+        ... "LEFT JOIN filters_namecolors fnc ON fnc.steamid = cm.steamid64 "
+        ... "WHERE cm.clan_id = %d "
+        ... "ORDER BY cm.rank DESC, cm.joined_at ASC",
+        clanId);
+
+    DataPack pack = new DataPack();
+    pack.WriteCell(userId);
+    pack.WriteString(clanName);
+
+    g_Database.Query(SQL_OnClanMembersList, query, pack);
 }
 
 void GetClanByPlayer(const char[] steamid64, SQLQueryCallback callback, any data = 0)
@@ -3183,23 +3201,26 @@ public void SQL_OnClanInfoById(Database db, DBResultSet results, const char[] er
         return;
     }
 
+    int clanId = results.FetchInt(0);
     char clanName[CLAN_NAME_MAXLEN + 1];
     char clanTag[CLAN_TAG_STORE_MAXLEN];
     char ownerSteam[STEAMID64_MAXLEN];
     char description[CLAN_DESC_MAXLEN + 1];
     char ownerName[MAX_NAME_LENGTH * 2];
 
-    results.FetchString(0, clanName, sizeof(clanName));
-    results.FetchString(1, clanTag, sizeof(clanTag));
-    results.FetchString(2, ownerSteam, sizeof(ownerSteam));
-    results.FetchString(3, description, sizeof(description));
+    results.FetchString(1, clanName, sizeof(clanName));
+    results.FetchString(2, clanTag, sizeof(clanTag));
+    results.FetchString(3, ownerSteam, sizeof(ownerSteam));
+    results.FetchString(4, description, sizeof(description));
     ResolvePlayerDisplayName(ownerSteam, ownerName, sizeof(ownerName));
 
     CPrintToChat(client, "{default}[Clans] %s", clanName);
     CPrintToChat(client, "{default}[Clans] Owner: %s", ownerName);
     CPrintToChat(client, "{default}[Clans] Clan tag: %s", clanTag[0] ? clanTag : "(none)");
     CPrintToChat(client, "{default}[Clans] Desc: %s", description[0] ? description : "(none)");
-    CPrintToChat(client, "{default}[Clans] Member count: %d", results.FetchInt(4));
+    CPrintToChat(client, "{default}[Clans] Member count: %d", results.FetchInt(5));
+
+    QueryClanMembersListForClient(data, clanId, clanName);
 }
 
 public void SQL_OnClanMembersContext(Database db, DBResultSet results, const char[] error, any data)
@@ -3228,20 +3249,7 @@ public void SQL_OnClanMembersContext(Database db, DBResultSet results, const cha
     char clanName[CLAN_NAME_MAXLEN + 1];
     results.FetchString(ClanByPlayerCol_Name, clanName, sizeof(clanName));
 
-    char query[512];
-    FormatEx(query, sizeof(query),
-        "SELECT cm.steamid64, cm.rank, COALESCE(fnc.color, '') "
-        ... "FROM clan_members cm "
-        ... "LEFT JOIN filters_namecolors fnc ON fnc.steamid = cm.steamid64 "
-        ... "WHERE cm.clan_id = %d "
-        ... "ORDER BY cm.rank DESC, cm.joined_at ASC",
-        clanId);
-
-    DataPack pack = new DataPack();
-    pack.WriteCell(GetClientUserId(client));
-    pack.WriteString(clanName);
-
-    g_Database.Query(SQL_OnClanMembersList, query, pack);
+    QueryClanMembersListForClient(GetClientUserId(client), clanId, clanName);
 }
 
 public void SQL_OnClanMembersList(Database db, DBResultSet results, const char[] error, any data)
