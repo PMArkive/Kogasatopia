@@ -8,15 +8,25 @@
 #include <morecolors>
 #include <saysounds>
 #include <whaletracker_api>
+
+native bool Filters_GetChatName(int client, char[] buffer, int maxlen);
+
 #define HEADSHOT_SUPPRESS_WINDOW 0.5
 #define AIRSHOT_MIN_HEIGHT 50.0
 #define SOUND_AIRSHOT "misc/taps_02.wav"
 #define SOUND_AIRSHOT_DOWNLOAD "sound/misc/taps_02.wav"
 #define SAYSOUND_AIRSHOT_COMMAND "airshot"
+
 bool g_bSaySoundsAvailable = false;
-Cookie g_hNameColorCookie = null;
 int g_iPendingAirshotAttacker[MAXPLAYERS + 1];
 float g_fLastHeadshotTime[MAXPLAYERS + 1];
+
+public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int errMax)
+{
+	MarkNativeAsOptional("Filters_GetChatName");
+	return APLRes_Success;
+}
+
 public Plugin myinfo =
 {
 	name = "[TF2] Airshot",
@@ -29,7 +39,6 @@ public void OnPluginStart()
 {
 	HookEvent("player_death", Event_PlayerDeath, EventHookMode_Post);
 	g_bSaySoundsAvailable = LibraryExists("saysounds");
-	g_hNameColorCookie = FindClientCookie("filter_namecolor");
 }
 
 public void OnLibraryAdded(const char[] name)
@@ -91,11 +100,11 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
 	}
 	g_fLastHeadshotTime[victim] = GetGameTime();
 	g_iPendingAirshotAttacker[victim] = 0;
-	char attackerColorTag[40];
-	char victimColorTag[40];
-	BuildNameColorTag(attacker, attackerColorTag, sizeof(attackerColorTag));
-	BuildNameColorTag(victim, victimColorTag, sizeof(victimColorTag));
-	CPrintToChatAll("%s%N{default} headshot %s%N{default} while in the air!", attackerColorTag, attacker, victimColorTag, victim);
+	char attackerName[256];
+	char victimName[256];
+	BuildDisplayName(attacker, attackerName, sizeof(attackerName));
+	BuildDisplayName(victim, victimName, sizeof(victimName));
+	CPrintToChatAll("%s headshot %s while in the air!", attackerName, victimName);
 	if (g_bSaySoundsAvailable)
 	{
 		SaySounds_PlayCommand(0, SAYSOUND_AIRSHOT_COMMAND);
@@ -139,11 +148,11 @@ public Action Timer_BroadcastAirshot(Handle timer, any userid)
 		return Plugin_Stop;
 	}
 
-	char attackerColorTag[40];
-	char victimColorTag[40];
-	BuildNameColorTag(attacker, attackerColorTag, sizeof(attackerColorTag));
-	BuildNameColorTag(victim, victimColorTag, sizeof(victimColorTag));
-	CPrintToChatAll("%s%N{default} airshot %s%N{default}!", attackerColorTag, attacker, victimColorTag, victim);
+	char attackerName[256];
+	char victimName[256];
+	BuildDisplayName(attacker, attackerName, sizeof(attackerName));
+	BuildDisplayName(victim, victimName, sizeof(victimName));
+	CPrintToChatAll("%s airshot %s!", attackerName, victimName);
 	if (!IsPlayerAlive(victim))
 	{
 		ApplyBonusPoints(attacker, 1, true, true, 1.0, "airshot_kill");
@@ -165,22 +174,20 @@ static bool IsValidClient(int client)
 	return (client > 0 && client <= MaxClients && IsClientInGame(client));
 }
 
-static void BuildNameColorTag(int client, char[] colorTag, int length)
+static void BuildDisplayName(int client, char[] buffer, int maxlen)
 {
-	if (g_hNameColorCookie != null && AreClientCookiesCached(client))
+	buffer[0] = '\0';
+
+	if (GetFeatureStatus(FeatureType_Native, "Filters_GetChatName") == FeatureStatus_Available
+		&& Filters_GetChatName(client, buffer, maxlen)
+		&& buffer[0] != '\0')
 	{
-		char cookieValue[32];
-		GetClientCookie(client, g_hNameColorCookie, cookieValue, sizeof(cookieValue));
-		TrimString(cookieValue);
-		ToLowercaseInPlace(cookieValue, sizeof(cookieValue));
-		if (cookieValue[0] != '\0')
-		{
-			Format(colorTag, length, "{%s}", cookieValue);
-			return;
-		}
+		return;
 	}
 
-	BuildTeamColorTag(client, colorTag, length);
+	char colorTag[16];
+	BuildTeamColorTag(client, colorTag, sizeof(colorTag));
+	Format(buffer, maxlen, "%s%N{default}", colorTag, client);
 }
 
 static void BuildTeamColorTag(int client, char[] colorTag, int length)
@@ -193,13 +200,6 @@ static void BuildTeamColorTag(int client, char[] colorTag, int length)
 	}
 }
 
-static void ToLowercaseInPlace(char[] buffer, int maxlen)
-{
-	for (int i = 0; i < maxlen && buffer[i] != '\0'; i++)
-	{
-		buffer[i] = CharToLower(buffer[i]);
-	}
-}
 static bool IsVictimInAir(int victim)
 {
 	int flags = GetEntityFlags(victim);
