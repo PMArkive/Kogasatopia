@@ -2,6 +2,7 @@
 #pragma newdecls required
 
 #include <sourcemod>
+#include <clans_api>
 
 #define PLUGIN_NAME "Tags"
 #define PLUGIN_AUTHOR "Codex"
@@ -15,7 +16,6 @@
 #define TAG_SQL_VALUE_MAXLEN ((TAG_VALUE_MAXLEN * 2) + 1)
 
 native bool CustomHats_GetPrefix(int client, char[] buffer, int maxlen);
-native bool Clans_GetTags(int client, char[] buffer, int maxlen);
 
 public Plugin myinfo =
 {

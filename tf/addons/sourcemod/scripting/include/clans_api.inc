@@ -6,6 +6,19 @@
 #include <sourcemod>
 
 /**
+ * Returns the formatted clan tag string(s) for a client.
+ *
+ * The returned string is suitable for direct display and may include the
+ * main clan tag plus a selected sub-tag joined together.
+ *
+ * @param client        Client index to inspect.
+ * @param buffer        Destination buffer.
+ * @param maxlen        Destination buffer size.
+ * @return              True on success with a non-empty result, false otherwise.
+ */
+native bool Clans_GetTags(int client, char[] buffer, int maxlen);
+
+/**
  * Returns how many connected players on a team share the caller's clan_id.
  *
  * Return values:
