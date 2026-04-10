@@ -26,9 +26,13 @@ static const int g_GameTeams[GAME_TEAM_COUNT] =
 };
 
 StringMap g_hMapImmunity = null;            // SteamID64 set for map-long immunity.
+StringMap g_hPersistentImmunity = null;     // SteamID64 set for persistent admin immunity.
+Database  g_hImmunityDb = null;
+bool      g_bImmunityDbReady = false;
 ConVar  g_hLogEnabled;
 ConVar  g_hDiffThreshold;
 ConVar  g_hSimpleSelection;
+ConVar  g_hDatabaseConfig;
 ConVar  g_hMpAutoteamBalance;
 ConVar  g_hMpTeamsUnbalanceLimit;
 int     g_iSavedAutoteamBalance;
@@ -62,12 +66,15 @@ public void OnPluginStart()
     g_hLogEnabled = CreateConVar("sm_autobalance_log", "1", "Enable autobalance debug logging.", _, true, 0.0, true, 1.0);
     g_hDiffThreshold = CreateConVar("sm_autobalance_diff", "1", "Autobalance when team size difference is above this value.", _, true, 1.0, true, 10.0);
     g_hSimpleSelection = CreateConVar("sm_autobalance_simple_selection", "1", "If enabled, autobalance prefers the most recently joined dead non-Engineer on the oversized team, then falls back to lower-priority eligible players by userID.", _, true, 0.0, true, 1.0);
-    RegAdminCmd("sm_immune", Command_Immune, ADMFLAG_GENERIC, "sm_immune <name> - Make a player immune to autobalance for this map.");
+    g_hDatabaseConfig = CreateConVar("sm_autobalance_database", "default", "Database config name from databases.cfg to use for persistent autobalance immunity.");
+    RegAdminCmd("sm_immune", Command_Immune, ADMFLAG_GENERIC, "sm_immune <name> - Toggle persistent autobalance immunity for a player.");
     BuildPath(Path_SM, g_sLogPath, sizeof(g_sLogPath), "logs/autobalance.log");
     LogToFileEx(g_sLogPath, "[autobalance_4teams] Plugin started.");
     g_hMapImmunity = new StringMap();
+    g_hPersistentImmunity = new StringMap();
 
     ApplyServerBalanceCvars(true);
+    ConnectImmunityDatabase();
 }
 
 public void OnMapStart()
@@ -94,6 +101,24 @@ public void OnPluginEnd()
     {
         KillTimer(g_hAutoBalanceTimer);
         g_hAutoBalanceTimer = INVALID_HANDLE;
+    }
+
+    if (g_hImmunityDb != null)
+    {
+        delete g_hImmunityDb;
+        g_hImmunityDb = null;
+    }
+
+    if (g_hMapImmunity != null)
+    {
+        delete g_hMapImmunity;
+        g_hMapImmunity = null;
+    }
+
+    if (g_hPersistentImmunity != null)
+    {
+        delete g_hPersistentImmunity;
+        g_hPersistentImmunity = null;
     }
 }
 
@@ -498,7 +523,24 @@ static int SelectPreferredRecentPlayer(int team)
 
 static bool IsClientImmune(int client)
 {
-    return IsClientMapImmune(client);
+    return IsClientMapImmune(client) || IsClientPersistentlyImmune(client);
+}
+
+static bool IsClientPersistentlyImmune(int client)
+{
+    if (g_hPersistentImmunity == null || !IsClientInGame(client))
+    {
+        return false;
+    }
+
+    char steamId[32];
+    if (!GetClientAuthId(client, AuthId_SteamID64, steamId, sizeof(steamId)))
+    {
+        return false;
+    }
+
+    int dummy = 0;
+    return g_hPersistentImmunity.GetValue(steamId, dummy);
 }
 
 static bool IsClientMapImmune(int client)
@@ -539,11 +581,121 @@ static bool SetClientMapImmunity(int client, bool immune)
     return true;
 }
 
+static void ConnectImmunityDatabase()
+{
+    char configName[64];
+    g_hDatabaseConfig.GetString(configName, sizeof(configName));
+    Database.Connect(SQL_OnImmunityDatabaseConnected, configName);
+}
+
+public void SQL_OnImmunityDatabaseConnected(Database db, const char[] error, any data)
+{
+    if (db == null)
+    {
+        LogError("[autobalance_4teams] Immunity DB connection failed: %s", error);
+        return;
+    }
+
+    if (g_hImmunityDb != null)
+    {
+        delete g_hImmunityDb;
+    }
+
+    g_hImmunityDb = db;
+    g_bImmunityDbReady = false;
+
+    if (!g_hImmunityDb.SetCharset("utf8mb4"))
+    {
+        LogError("[autobalance_4teams] Failed to set utf8mb4 charset");
+    }
+
+    g_hImmunityDb.Query(SQL_OnImmunitySchemaReady,
+        "CREATE TABLE IF NOT EXISTS autobalance_immunity ("
+        ... "steamid64 VARCHAR(32) NOT NULL PRIMARY KEY, "
+        ... "immune TINYINT(1) NOT NULL DEFAULT 1)");
+}
+
+public void SQL_OnImmunitySchemaReady(Database db, DBResultSet results, const char[] error, any data)
+{
+    if (error[0])
+    {
+        LogError("[autobalance_4teams] Immunity schema creation failed: %s", error);
+        return;
+    }
+
+    if (g_hPersistentImmunity != null)
+    {
+        g_hPersistentImmunity.Clear();
+    }
+
+    g_hImmunityDb.Query(SQL_OnPersistentImmunityLoaded,
+        "SELECT steamid64 FROM autobalance_immunity WHERE immune != 0");
+}
+
+public void SQL_OnPersistentImmunityLoaded(Database db, DBResultSet results, const char[] error, any data)
+{
+    if (error[0])
+    {
+        LogError("[autobalance_4teams] Persistent immunity preload failed: %s", error);
+        return;
+    }
+
+    if (g_hPersistentImmunity == null)
+    {
+        g_hPersistentImmunity = new StringMap();
+    }
+    else
+    {
+        g_hPersistentImmunity.Clear();
+    }
+
+    if (results != null)
+    {
+        char steamId[32];
+        while (results.FetchRow())
+        {
+            results.FetchString(0, steamId, sizeof(steamId));
+            TrimString(steamId);
+            if (!steamId[0])
+            {
+                continue;
+            }
+
+            g_hPersistentImmunity.SetValue(steamId, 1, true);
+        }
+    }
+
+    g_bImmunityDbReady = true;
+}
+
+static void AB_EscapeSql(const char[] input, char[] output, int maxlen)
+{
+    output[0] = '\0';
+
+    if (g_hImmunityDb == null)
+    {
+        strcopy(output, maxlen, input);
+        return;
+    }
+
+    int written = 0;
+    if (!g_hImmunityDb.Escape(input, output, maxlen, written))
+    {
+        strcopy(output, maxlen, input);
+    }
+}
+
 public Action Command_Immune(int client, int args)
 {
     if (args < 1)
     {
         ReplyToCommand(client, "[autobalance_4teams] Usage: sm_immune <client name/substring>");
+        return Plugin_Handled;
+    }
+
+    if (g_hImmunityDb == null || !g_bImmunityDbReady)
+    {
+        ReplyToCommand(client, "[autobalance_4teams] Persistent immunity database is not ready.");
         return Plugin_Handled;
     }
 
@@ -557,15 +709,107 @@ public Action Command_Immune(int client, int args)
         return Plugin_Handled;
     }
 
-    if (!SetClientMapImmunity(target, true))
+    char steamId[32];
+    if (!GetClientAuthId(target, AuthId_SteamID64, steamId, sizeof(steamId)))
     {
-        ReplyToCommand(client, "[autobalance_4teams] Failed to apply map immunity to %N.", target);
+        ReplyToCommand(client, "[autobalance_4teams] Failed to read SteamID64 for %N.", target);
         return Plugin_Handled;
     }
 
-    CPrintToChatAll("{lightgreen}[Server]{default} {teamcolor}%N{default} is now autobalance-immune for this map.", target);
-    LogBalance("Manual map immunity applied by %N to %N", client, target);
+    bool wasImmune = false;
+    if (g_hPersistentImmunity != null)
+    {
+        int dummy = 0;
+        wasImmune = g_hPersistentImmunity.GetValue(steamId, dummy);
+    }
+
+    char escapedSteam[64];
+    AB_EscapeSql(steamId, escapedSteam, sizeof(escapedSteam));
+
+    char query[256];
+    if (wasImmune)
+    {
+        FormatEx(query, sizeof(query),
+            "DELETE FROM autobalance_immunity WHERE steamid64 = '%s'",
+            escapedSteam);
+    }
+    else
+    {
+        FormatEx(query, sizeof(query),
+            "REPLACE INTO autobalance_immunity (steamid64, immune) VALUES ('%s', 1)",
+            escapedSteam);
+    }
+
+    DataPack pack = new DataPack();
+    pack.WriteCell(GetClientUserId(client));
+    pack.WriteCell(GetClientUserId(target));
+    pack.WriteCell(wasImmune ? 1 : 0);
+    pack.WriteString(steamId);
+
+    g_hImmunityDb.Query(SQL_OnPersistentImmunityToggled, query, pack);
     return Plugin_Handled;
+}
+
+public void SQL_OnPersistentImmunityToggled(Database db, DBResultSet results, const char[] error, any data)
+{
+    DataPack pack = view_as<DataPack>(data);
+    pack.Reset();
+
+    int actorUserId = pack.ReadCell();
+    int targetUserId = pack.ReadCell();
+    bool wasImmune = (pack.ReadCell() != 0);
+    char steamId[32];
+    pack.ReadString(steamId, sizeof(steamId));
+    delete pack;
+
+    int actor = GetClientOfUserId(actorUserId);
+    int target = GetClientOfUserId(targetUserId);
+
+    if (error[0])
+    {
+        if (actor > 0 && IsClientInGame(actor))
+        {
+            ReplyToCommand(actor, "[autobalance_4teams] Failed to toggle persistent immunity.");
+        }
+
+        LogError("[autobalance_4teams] Persistent immunity toggle failed for %s: %s", steamId, error);
+        return;
+    }
+
+    if (g_hPersistentImmunity != null)
+    {
+        if (wasImmune)
+        {
+            g_hPersistentImmunity.Remove(steamId);
+        }
+        else
+        {
+            g_hPersistentImmunity.SetValue(steamId, 1, true);
+        }
+    }
+
+    if (target > 0 && IsClientInGame(target))
+    {
+        if (wasImmune)
+        {
+            CPrintToChatAll("{lightgreen}[Server]{default} {teamcolor}%N{default} is no longer persistently autobalance-immune.", target);
+            LogBalance("Persistent immunity removed by %N from %N", actor, target);
+        }
+        else
+        {
+            CPrintToChatAll("{lightgreen}[Server]{default} {teamcolor}%N{default} is now persistently autobalance-immune.", target);
+            LogBalance("Persistent immunity applied by %N to %N", actor, target);
+        }
+        return;
+    }
+
+    if (actor > 0 && IsClientInGame(actor))
+    {
+        ReplyToCommand(actor,
+            wasImmune
+                ? "[autobalance_4teams] Persistent immunity removed."
+                : "[autobalance_4teams] Persistent immunity applied.");
+    }
 }
 
 static int CountTeamPlayersRaw(int team)
