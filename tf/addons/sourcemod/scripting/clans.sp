@@ -10,7 +10,7 @@
 #define PLUGIN_VERSION            "1.0.0"
 #define PLUGIN_URL                "https://kogasa.tf"
 
-#define CLAN_CREATE_COST          100
+#define CLAN_CREATE_COST          250
 #define INVITE_EXPIRE_SECONDS     604800
 #define CLAN_NAME_MAXLEN          64
 #define CLAN_DESC_MAXLEN          128
@@ -107,6 +107,7 @@ public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int err_max)
 {
     RegPluginLibrary("clans");
     CreateNative("Clans_GetTags", Native_Clans_GetTags);
+    CreateNative("Clans_GetSameTeamClanMemberCount", Native_Clans_GetSameTeamClanMemberCount);
     MarkNativeAsOptional("Tags_GetTag");
     return APLRes_Success;
 }
@@ -118,10 +119,15 @@ bool g_bDatabaseReady = false;
 char g_sDbDriver[16];
 ConVar g_cvDatabaseConfig = null;
 Handle g_hInviteCleanupTimer = null;
+StringMap g_hClanIdCache = null;
+bool g_bClanIdCacheReady = false;
 
 PromptState g_PromptState[MAXPLAYERS + 1];
 int g_PendingAdminClanDescId[MAXPLAYERS + 1];
 char g_PendingAdminClanDescName[MAXPLAYERS + 1][CLAN_NAME_MAXLEN + 1];
+int g_iClientClanId[MAXPLAYERS + 1];
+bool g_bClientClanLoaded[MAXPLAYERS + 1];
+bool g_bClientClanLoadPending[MAXPLAYERS + 1];
 
 public void OnPluginStart()
 {
@@ -170,6 +176,12 @@ public void OnPluginEnd()
         delete g_Database;
         g_Database = null;
     }
+
+    if (g_hClanIdCache != null)
+    {
+        delete g_hClanIdCache;
+        g_hClanIdCache = null;
+    }
 }
 
 public void OnClientDisconnect(int client)
@@ -177,11 +189,24 @@ public void OnClientDisconnect(int client)
     ResetClientState(client);
 }
 
+public void OnClientPostAdminCheck(int client)
+{
+    if (client <= 0 || client > MaxClients || IsFakeClient(client))
+    {
+        return;
+    }
+
+    RequestClientClanIdLoad(client);
+}
+
 void ResetClientState(int client)
 {
     g_PromptState[client] = Prompt_None;
     g_PendingAdminClanDescId[client] = 0;
     g_PendingAdminClanDescName[client][0] = '\0';
+    g_iClientClanId[client] = 0;
+    g_bClientClanLoaded[client] = false;
+    g_bClientClanLoadPending[client] = false;
 }
 
 void ConnectDatabase()
@@ -208,6 +233,7 @@ public void SQL_OnDatabaseConnected(Database db, const char[] error, any data)
     g_Database = db;
     g_Database.Driver.GetIdentifier(g_sDbDriver, sizeof(g_sDbDriver));
     g_bDatabaseReady = false;
+    g_bClanIdCacheReady = false;
 
     if (!g_Database.SetCharset("utf8mb4"))
     {
@@ -229,6 +255,7 @@ void CreateSchemaStep(int step)
     {
         g_bDatabaseReady = true;
         CleanupExpiredInvites();
+        RebuildClanIdCache();
 
         if (g_hInviteCleanupTimer == null)
         {
@@ -236,6 +263,14 @@ void CreateSchemaStep(int step)
         }
 
         PrintToServer("[Clans] Database ready using driver '%s'.", g_sDbDriver);
+
+        for (int i = 1; i <= MaxClients; i++)
+        {
+            if (IsClientInGame(i) && !IsFakeClient(i))
+            {
+                RequestClientClanIdLoad(i);
+            }
+        }
         return;
     }
 
@@ -832,6 +867,290 @@ public any Native_Clans_GetTags(Handle plugin, int numParams)
 
     SetNativeString(2, buffer, maxlen, true);
     return found;
+}
+
+public any Native_Clans_GetSameTeamClanMemberCount(Handle plugin, int numParams)
+{
+    int client = GetNativeCell(1);
+    int team = (numParams >= 2) ? GetNativeCell(2) : 0;
+    return GetSameTeamClanMemberCount(client, team);
+}
+
+void RebuildClanIdCache()
+{
+    g_bClanIdCacheReady = false;
+
+    if (!EnsureDatabaseReady() || g_Database == null)
+    {
+        return;
+    }
+
+    char query[128];
+    FormatEx(query, sizeof(query), "SELECT steamid64, clan_id FROM clan_members");
+    g_Database.Query(SQL_OnClanIdCacheRebuilt, query);
+}
+
+public void SQL_OnClanIdCacheRebuilt(Database db, DBResultSet results, const char[] error, any data)
+{
+    if (error[0])
+    {
+        LogError("[Clans] Failed to rebuild clan id cache: %s", error);
+        return;
+    }
+
+    if (g_hClanIdCache != null)
+    {
+        delete g_hClanIdCache;
+    }
+
+    g_hClanIdCache = new StringMap();
+
+    char steamid64[STEAMID64_MAXLEN];
+    while (results != null && results.FetchRow())
+    {
+        results.FetchString(0, steamid64, sizeof(steamid64));
+        TrimString(steamid64);
+        if (!steamid64[0])
+        {
+            continue;
+        }
+
+        g_hClanIdCache.SetValue(steamid64, results.FetchInt(1), true);
+    }
+
+    g_bClanIdCacheReady = true;
+}
+
+bool GetCachedClanIdForSteam64(const char[] steamid64, int &clanId)
+{
+    clanId = 0;
+    return (g_hClanIdCache != null && steamid64[0] != '\0' && g_hClanIdCache.GetValue(steamid64, clanId));
+}
+
+void UpdateClanIdCacheEntry(const char[] steamid64, int clanId)
+{
+    if (steamid64[0] == '\0')
+    {
+        return;
+    }
+
+    if (g_hClanIdCache == null)
+    {
+        g_hClanIdCache = new StringMap();
+    }
+
+    if (clanId > 0)
+    {
+        g_hClanIdCache.SetValue(steamid64, clanId, true);
+    }
+    else
+    {
+        g_hClanIdCache.Remove(steamid64);
+    }
+}
+
+void RemoveClanIdCacheMembers(int clanId)
+{
+    if (clanId <= 0 || g_hClanIdCache == null)
+    {
+        return;
+    }
+
+    StringMapSnapshot snap = g_hClanIdCache.Snapshot();
+    if (snap == null)
+    {
+        return;
+    }
+
+    char steamid64[STEAMID64_MAXLEN];
+    int cachedClanId = 0;
+    for (int i = 0; i < snap.Length; i++)
+    {
+        snap.GetKey(i, steamid64, sizeof(steamid64));
+        if (!g_hClanIdCache.GetValue(steamid64, cachedClanId) || cachedClanId != clanId)
+        {
+            continue;
+        }
+
+        g_hClanIdCache.Remove(steamid64);
+    }
+
+    delete snap;
+}
+
+int GetSameTeamClanMemberCount(int client, int team = 0)
+{
+    if (client <= 0 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
+    {
+        return 0;
+    }
+
+    if (team <= 1)
+    {
+        team = GetClientTeam(client);
+    }
+
+    if (team <= 1)
+    {
+        return 0;
+    }
+
+    if (!g_bClanIdCacheReady)
+    {
+        return -1;
+    }
+
+    char steamid64[STEAMID64_MAXLEN];
+    if (!GetClientSteam64(client, steamid64, sizeof(steamid64)))
+    {
+        return 0;
+    }
+
+    int clanId = 0;
+    if (!GetCachedClanIdForSteam64(steamid64, clanId) || clanId <= 0)
+    {
+        return 0;
+    }
+
+    int count = 0;
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (!IsClientInGame(i) || IsFakeClient(i) || GetClientTeam(i) != team)
+        {
+            continue;
+        }
+
+        char currentSteam[STEAMID64_MAXLEN];
+        if (!GetClientSteam64(i, currentSteam, sizeof(currentSteam)))
+        {
+            continue;
+        }
+
+        int currentClanId = 0;
+        if (GetCachedClanIdForSteam64(currentSteam, currentClanId) && currentClanId == clanId)
+        {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+void RequestClientClanIdLoad(int client)
+{
+    if (!EnsureDatabaseReady() || client <= 0 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
+    {
+        return;
+    }
+
+    if (g_bClientClanLoadPending[client])
+    {
+        return;
+    }
+
+    char steamid64[STEAMID64_MAXLEN];
+    if (!GetClientSteam64(client, steamid64, sizeof(steamid64)))
+    {
+        return;
+    }
+
+    char escapedSteam[SQL_STEAMID64_MAXLEN];
+    EscapeSql(steamid64, escapedSteam, sizeof(escapedSteam));
+
+    char query[256];
+    FormatEx(query, sizeof(query),
+        "SELECT clan_id FROM clan_members WHERE steamid64 = '%s' LIMIT 1",
+        escapedSteam);
+
+    g_bClientClanLoadPending[client] = true;
+    g_Database.Query(SQL_OnClientClanIdLoaded, query, GetClientUserId(client));
+}
+
+public void SQL_OnClientClanIdLoaded(Database db, DBResultSet results, const char[] error, any data)
+{
+    int client = GetClientOfUserId(data);
+    if (client <= 0 || client > MaxClients)
+    {
+        return;
+    }
+
+    g_bClientClanLoadPending[client] = false;
+
+    if (!IsClientInGame(client) || IsFakeClient(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Failed to load clan id for %N: %s", client, error);
+        return;
+    }
+
+    g_iClientClanId[client] = (results != null && results.FetchRow()) ? results.FetchInt(0) : 0;
+    g_bClientClanLoaded[client] = true;
+
+    char steamid64[STEAMID64_MAXLEN];
+    if (GetClientSteam64(client, steamid64, sizeof(steamid64)))
+    {
+        UpdateClanIdCacheEntry(steamid64, g_iClientClanId[client]);
+    }
+}
+
+void SetClientClanIdBySteam64(const char[] steamid64, int clanId)
+{
+    UpdateClanIdCacheEntry(steamid64, clanId);
+
+    char currentSteam[STEAMID64_MAXLEN];
+
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        if (!IsClientInGame(client) || IsFakeClient(client))
+        {
+            continue;
+        }
+
+        if (!GetClientSteam64(client, currentSteam, sizeof(currentSteam)))
+        {
+            continue;
+        }
+
+        if (!StrEqual(currentSteam, steamid64, false))
+        {
+            continue;
+        }
+
+        g_iClientClanId[client] = clanId;
+        g_bClientClanLoaded[client] = true;
+        g_bClientClanLoadPending[client] = false;
+    }
+}
+
+void ClearConnectedClanId(int clanId)
+{
+    if (clanId <= 0)
+    {
+        return;
+    }
+
+    RemoveClanIdCacheMembers(clanId);
+
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        if (!IsClientInGame(client) || IsFakeClient(client))
+        {
+            continue;
+        }
+
+        if (g_iClientClanId[client] != clanId)
+        {
+            continue;
+        }
+
+        g_iClientClanId[client] = 0;
+        g_bClientClanLoaded[client] = true;
+        g_bClientClanLoadPending[client] = false;
+    }
 }
 
 void CleanupExpiredInvites()
@@ -2895,6 +3214,11 @@ public void SQLTxn_OnCreateClanSuccess(Database db, any data, int numQueries, DB
         clanId = results[0].InsertId;
     }
 
+    if (ownerSteam[0] != '\0' && clanId > 0)
+    {
+        SetClientClanIdBySteam64(ownerSteam, clanId);
+    }
+
     int client = GetClientOfUserId(userId);
     if (client > 0 && IsClientInGame(client))
     {
@@ -3018,6 +3342,7 @@ public void SQL_OnClanLeaveContext(Database db, DBResultSet results, const char[
     DataPack pack = new DataPack();
     pack.WriteCell(GetClientUserId(client));
     pack.WriteString(clanName);
+    pack.WriteString(steamid64);
 
     g_Database.Execute(txn, SQL_OnClanLeaveSuccess, SQL_OnClanLeaveFailure, pack);
 }
@@ -3078,8 +3403,15 @@ public void SQL_OnClanLeaveSuccess(Database db, any data, int numQueries, DBResu
 
     int userId = pack.ReadCell();
     char clanName[CLAN_NAME_MAXLEN + 1];
+    char steamid64[STEAMID64_MAXLEN];
     pack.ReadString(clanName, sizeof(clanName));
+    pack.ReadString(steamid64, sizeof(steamid64));
     delete pack;
+
+    if (steamid64[0] != '\0')
+    {
+        SetClientClanIdBySteam64(steamid64, 0);
+    }
 
     int client = GetClientOfUserId(userId);
     if (client <= 0 || !IsClientInGame(client))
@@ -3097,7 +3429,9 @@ public void SQL_OnClanLeaveFailure(Database db, any data, int numQueries, const 
 
     int userId = pack.ReadCell();
     char clanName[CLAN_NAME_MAXLEN + 1];
+    char steamid64[STEAMID64_MAXLEN];
     pack.ReadString(clanName, sizeof(clanName));
+    pack.ReadString(steamid64, sizeof(steamid64));
     delete pack;
 
     int client = GetClientOfUserId(userId);
@@ -3129,6 +3463,8 @@ public void SQLTxn_OnDeleteClanSuccess(Database db, any data, int numQueries, DB
 
         PrintToChat(client, "[Clans] Clan %d deleted.", clanId);
     }
+
+    ClearConnectedClanId(clanId);
 }
 
 public void SQLTxn_OnDeleteClanFailure(Database db, any data, int numQueries, const char[] error, int failIndex, any[] queryData)
@@ -3819,6 +4155,11 @@ public void SQL_OnClanKickSuccess(Database db, any data, int numQueries, DBResul
     pack.ReadString(targetSteam, sizeof(targetSteam));
     delete pack;
 
+    if (targetSteam[0] != '\0')
+    {
+        SetClientClanIdBySteam64(targetSteam, 0);
+    }
+
     int actor = GetClientOfUserId(actorUserId);
     int target = GetClientOfUserId(targetUserId);
 
@@ -4434,6 +4775,8 @@ public void SQL_OnJoinOpenClanValidate(Database db, DBResultSet results, const c
     DataPack next = new DataPack();
     next.WriteCell(userId);
     next.WriteString(clanName);
+    next.WriteCell(clanId);
+    next.WriteString(steamid64);
 
     AddClanMember(clanId, steamid64, SQL_OnJoinOpenClanSuccess, next, ClanRank_Member);
 }
@@ -4445,7 +4788,10 @@ public void SQL_OnJoinOpenClanSuccess(Database db, DBResultSet results, const ch
 
     int userId = pack.ReadCell();
     char clanName[CLAN_NAME_MAXLEN + 1];
+    int clanId = pack.ReadCell();
+    char steamid64[STEAMID64_MAXLEN];
     pack.ReadString(clanName, sizeof(clanName));
+    pack.ReadString(steamid64, sizeof(steamid64));
     delete pack;
 
     int client = GetClientOfUserId(userId);
@@ -4466,6 +4812,11 @@ public void SQL_OnJoinOpenClanSuccess(Database db, DBResultSet results, const ch
         }
         LogError("[Clans] Join open clan failed: %s", error);
         return;
+    }
+
+    if (steamid64[0] != '\0' && clanId > 0)
+    {
+        SetClientClanIdBySteam64(steamid64, clanId);
     }
 
     PrintToChat(client, "[Clans] You joined '%s'.", clanName);
@@ -5245,6 +5596,11 @@ public void SQLTxn_OnAcceptInviteSuccess(Database db, any data, int numQueries, 
     pack.ReadString(fallbackClanName, sizeof(fallbackClanName));
     int clanId = pack.ReadCell();
     delete pack;
+
+    if (steamid64[0] != '\0' && clanId > 0)
+    {
+        SetClientClanIdBySteam64(steamid64, clanId);
+    }
 
     int client = GetClientOfUserId(userId);
     if (client <= 0 || !IsClientInGame(client))
