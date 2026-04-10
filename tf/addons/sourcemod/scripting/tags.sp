@@ -596,11 +596,7 @@ public any Native_Tags_GetSelectedTag(Handle plugin, int numParams)
     bool found = false;
     if (client > 0 && client <= MaxClients && IsClientInGame(client) && !IsFakeClient(client))
     {
-        if (g_bTagLoaded[client] && g_SelectedTags[client][0])
-        {
-            strcopy(buffer, sizeof(buffer), g_SelectedTags[client]);
-            found = true;
-        }
+        found = GetResolvedClientTag(client, buffer, sizeof(buffer));
     }
 
     SetNativeString(2, buffer, maxlen, true);
