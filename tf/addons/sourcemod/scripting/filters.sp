@@ -3969,15 +3969,6 @@ public void Filters_PrenameLoadRulesCallback(Database db, DBResultSet results, c
         if (Prename_IsIdString(pattern))
         {
             g_PrenameIdRules.SetString(pattern, newname);
-            continue;
-        }
-
-        char lowerNew[PRENAME_MAX_RENAME];
-        strcopy(lowerNew, sizeof(lowerNew), newname);
-        Prename_ToLowercaseInPlace(lowerNew, sizeof(lowerNew));
-        if (!g_PrenameOutputMap.ContainsKey(lowerNew))
-        {
-            g_PrenameOutputMap.SetString(lowerNew, newname);
         }
     }
 }
@@ -3996,17 +3987,13 @@ public Action Timer_PrenameApply(Handle timer, any userId)
 
 static bool Prename_Apply(int client)
 {
-    if (!g_bDbReady || g_hFiltersDb == null || g_PrenameIdRules == null || g_PrenameOutputMap == null)
+    if (!g_bDbReady || g_hFiltersDb == null || g_PrenameIdRules == null)
     {
         return false;
     }
 
     char currentName[MAX_NAME_LENGTH];
     GetClientName(client, currentName, sizeof(currentName));
-
-    char lowerName[MAX_NAME_LENGTH];
-    strcopy(lowerName, sizeof(lowerName), currentName);
-    Prename_ToLowercaseInPlace(lowerName, sizeof(lowerName));
 
     char steam2[32], steam64[32];
     Prename_GetClientIds(client, steam2, sizeof(steam2), steam64, sizeof(steam64));
@@ -4018,27 +4005,9 @@ static bool Prename_Apply(int client)
         {
             SetClientName(client, rename);
         }
-        return false;
+        return true;
     }
 
-    char output[PRENAME_MAX_RENAME];
-    if (!Prename_TryGetOutputMatch(lowerName, output, sizeof(output)))
-    {
-        return false;
-    }
-
-    char migrateId[32];
-    Prename_GetPreferredClientId(steam64, steam2, migrateId, sizeof(migrateId));
-    if (migrateId[0] != '\0')
-    {
-        Prename_SaveRule(migrateId, output);
-        Prename_SetIdRuleCache(migrateId, output);
-    }
-
-    if (!StrEqual(currentName, output, false))
-    {
-        SetClientName(client, output);
-    }
     return true;
 }
 
@@ -4451,12 +4420,6 @@ static bool Prename_TryGetIdRule(const char[] steam64, const char[] steam2, char
     }
 
     return false;
-}
-
-static bool Prename_TryGetOutputMatch(const char[] lowerName, char[] output, int maxlen)
-{
-    char key[PRENAME_MAX_RENAME];
-    return Prename_FindBestOutputMatch(lowerName, output, maxlen, key, sizeof(key));
 }
 
 static bool Prename_FindBestOutputMatch(const char[] lowerName, char[] output, int outMax, char[] keyOut, int keyMax)
