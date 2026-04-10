@@ -5,12 +5,12 @@
 #include <clientprefs>
 #include <morecolors>
 #include <tf2_stocks>
+#include <clans_api>
 #include <whaletracker_api>
 
 native int FilterAlerts_MarkAutobalance(int client);
 
 #define CHECK_INTERVAL      3.0
-#define IMMUNITY_DURATION   300.0   // seconds a player stays immune after being balanced
 #define TEAM_RED            2
 #define TEAM_BLUE           3
 #define TEAM_GREEN          4
@@ -25,7 +25,6 @@ static const int g_GameTeams[GAME_TEAM_COUNT] =
     TEAM_YELLOW
 };
 
-float   g_fImmunityExpiry[MAXPLAYERS + 1];  // GetGameTime() at which immunity expires; 0.0 = not immune
 StringMap g_hMapImmunity = null;            // SteamID64 set for map-long immunity.
 ConVar  g_hLogEnabled;
 ConVar  g_hDiffThreshold;
@@ -49,6 +48,7 @@ public Plugin myinfo =
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
 {
     MarkNativeAsOptional("FilterAlerts_MarkAutobalance");
+    MarkNativeAsOptional("Clans_GetSameTeamClanMemberCount");
     MarkNativeAsOptional("WhaleTracker_IsCurrentRoundMvp");
     return APLRes_Success;
 }
@@ -95,18 +95,6 @@ public void OnPluginEnd()
         KillTimer(g_hAutoBalanceTimer);
         g_hAutoBalanceTimer = INVALID_HANDLE;
     }
-}
-
-public void OnClientPutInServer(int client)
-{
-    if (client <= 0 || client > MaxClients) return;
-    g_fImmunityExpiry[client] = 0.0;
-}
-
-public void OnClientDisconnect(int client)
-{
-    if (client <= 0 || client > MaxClients) return;
-    g_fImmunityExpiry[client] = 0.0;
 }
 
 // ---------------------------------------------------------------------------
@@ -404,7 +392,7 @@ public Action Timer_Autobalance(Handle timer)
 
     ChangeClientTeam(pick, smallestTeam);
     TF2_RespawnPlayer(pick);
-    SetClientImmunity(pick, true);
+    SetClientMapImmunity(pick, true);
 
     CPrintToChatAllEx(
         pick,
@@ -429,6 +417,7 @@ static bool IsEligiblePlayer(int client, int team)
     if (!IsClientInGame(client) || IsFakeClient(client)) return false;
     if (GetClientTeam(client) != team) return false;
     if (IsClientImmune(client)) return false;
+    if (HasClanTeammateProtection(client, team)) return false;
     if (IsClientCurrentRoundMvpSafe(client)) return false;
 
     return true;
@@ -440,6 +429,7 @@ static bool IsEligiblePlayerForce(int client, int team)
     if (!IsClientInGame(client) || IsFakeClient(client)) return false;
     if (GetClientTeam(client) != team) return false;
     if (IsClientImmune(client)) return false;
+    if (HasClanTeammateProtection(client, team)) return false;
     if (IsClientCurrentRoundMvpSafe(client)) return false;
 
     return true;
@@ -453,6 +443,17 @@ static bool IsClientCurrentRoundMvpSafe(int client)
     }
 
     return WhaleTracker_IsCurrentRoundMvp(client);
+}
+
+static bool HasClanTeammateProtection(int client, int team)
+{
+    if (GetFeatureStatus(FeatureType_Native, "Clans_GetSameTeamClanMemberCount") != FeatureStatus_Available)
+    {
+        return false;
+    }
+
+    int count = Clans_GetSameTeamClanMemberCount(client, team);
+    return (count < 0 || count > 1);
 }
 
 static int GetSimpleSelectionPriority(int client)
@@ -497,28 +498,7 @@ static int SelectPreferredRecentPlayer(int team)
 
 static bool IsClientImmune(int client)
 {
-    if (IsClientMapImmune(client))
-    {
-        return true;
-    }
-
-    float expiry = g_fImmunityExpiry[client];
-    if (expiry <= 0.0) return false;
-
-    if (GetGameTime() >= expiry)
-    {
-        g_fImmunityExpiry[client] = 0.0;   // Immunity has expired; clear it.
-        return false;
-    }
-
-    return true;
-}
-
-static void SetClientImmunity(int client, bool immune)
-{
-    if (!IsClientInGame(client) || IsFakeClient(client)) return;
-
-    g_fImmunityExpiry[client] = immune ? (GetGameTime() + IMMUNITY_DURATION) : 0.0;
+    return IsClientMapImmune(client);
 }
 
 static bool IsClientMapImmune(int client)
