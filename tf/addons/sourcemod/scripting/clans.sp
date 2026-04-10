@@ -202,10 +202,12 @@ public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int err_max)
     RegPluginLibrary("clans");
     CreateNative("Clans_GetTags", Native_Clans_GetTags);
     CreateNative("Clans_GetSameTeamClanMemberCount", Native_Clans_GetSameTeamClanMemberCount);
+    MarkNativeAsOptional("Filters_GetChatName");
     MarkNativeAsOptional("Tags_GetTag");
     return APLRes_Success;
 }
 
+native bool Filters_GetChatName(int client, char[] buffer, int maxlen);
 native bool Tags_GetTag(int client, const char[] steamid64, char[] buffer, int maxlen);
 
 Database g_Database = null;
@@ -242,6 +244,7 @@ public void OnPluginStart()
     RegConsoleCmd("sm_claninvites", Command_ClanInvites, "Show pending clan invites.");
     RegConsoleCmd("sm_clandesc", Command_ClanDesc, "Set your clan description.");
     RegConsoleCmd("sm_clanrename", Command_ClanRename, "Rename your clan.");
+    RegConsoleCmd("sm_cc", Command_ClanChat, "Send a message to your clan.");
     RegAdminCmd("sm_clansetdesc", Command_ClanSetDesc, ADMFLAG_GENERIC, "Set any clan description.");
 
     /* Extra owner utility so open-clan menus are actually usable. */
@@ -716,6 +719,40 @@ static void BuildClanDisplayTag(const char[] rawTag, char[] buffer, int maxlen)
     }
 
     FormatEx(buffer, maxlen, "[{gold}%s{default}]", rawTag);
+}
+
+static void BuildClanChatSenderName(int client, char[] buffer, int maxlen)
+{
+    buffer[0] = '\0';
+
+    if (GetFeatureStatus(FeatureType_Native, "Filters_GetChatName") == FeatureStatus_Available)
+    {
+        if (Filters_GetChatName(client, buffer, maxlen) && buffer[0] != '\0')
+        {
+            return;
+        }
+    }
+
+    GetClientName(client, buffer, maxlen);
+}
+
+static bool IsConnectedClientInClan(int client, int clanId)
+{
+    if (client <= 0 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
+    {
+        return false;
+    }
+
+    if (g_bClientClanLoaded[client] && g_iClientClanId[client] == clanId)
+    {
+        return true;
+    }
+
+    char steamid64[STEAMID64_MAXLEN];
+    int cachedClanId = 0;
+    return GetClientSteam64(client, steamid64, sizeof(steamid64))
+        && GetCachedClanIdForSteam64(steamid64, cachedClanId)
+        && cachedClanId == clanId;
 }
 
 static void BuildClanMemberDisplayLine(const char[] steamid64, ClanRank rank, const char[] nameColor, char[] buffer, int maxlen)
@@ -2199,6 +2236,128 @@ public Action Command_ClansList(int client, int args)
 
     g_Database.Query(SQL_OnClansListMenu, query, GetClientUserId(client));
     return Plugin_Handled;
+}
+
+public Action Command_ClanChat(int client, int args)
+{
+    if (client <= 0)
+    {
+        ReplyToCommand(client, "[Clans] This command can only be used by players.");
+        return Plugin_Handled;
+    }
+
+    if (!EnsureDatabaseReady(client))
+    {
+        return Plugin_Handled;
+    }
+
+    if (args < 1)
+    {
+        PrintToChat(client, "[Clans] Usage: sm_cc <message>");
+        return Plugin_Handled;
+    }
+
+    char steamid64[STEAMID64_MAXLEN];
+    if (!GetClientSteam64(client, steamid64, sizeof(steamid64)))
+    {
+        PrintToChat(client, "[Clans] Could not read your SteamID64.");
+        return Plugin_Handled;
+    }
+
+    char message[192];
+    GetCmdArgString(message, sizeof(message));
+    StripQuotes(message);
+    TrimString(message);
+
+    if (!message[0])
+    {
+        PrintToChat(client, "[Clans] Usage: sm_cc <message>");
+        return Plugin_Handled;
+    }
+
+    DataPack pack = new DataPack();
+    pack.WriteCell(GetClientUserId(client));
+    pack.WriteString(message);
+
+    GetClanByPlayer(steamid64, SQL_OnClanChatContext, pack);
+    return Plugin_Handled;
+}
+
+public void SQL_OnClanChatContext(Database db, DBResultSet results, const char[] error, any data)
+{
+    DataPack pack = view_as<DataPack>(data);
+    pack.Reset();
+
+    int userId = pack.ReadCell();
+    char message[192];
+    pack.ReadString(message, sizeof(message));
+    delete pack;
+
+    int client = GetClientOfUserId(userId);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Clan chat context failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to look up your clan.");
+        return;
+    }
+
+    if (results == null || !results.FetchRow())
+    {
+        PrintToChat(client, "[Clans] You are not in a clan.");
+        return;
+    }
+
+    int clanId = results.FetchInt(ClanByPlayerCol_Id);
+
+    char clanTag[CLAN_TAG_STORE_MAXLEN];
+    char clanDisplayTag[CLAN_TAG_STORE_MAXLEN];
+    results.FetchString(ClanByPlayerCol_Tag, clanTag, sizeof(clanTag));
+    BuildClanDisplayTag(clanTag, clanDisplayTag, sizeof(clanDisplayTag));
+
+    char steamid64[STEAMID64_MAXLEN];
+    char selectedTag[256];
+    char selectedDisplayTag[256];
+    selectedDisplayTag[0] = '\0';
+    if (GetClientSteam64(client, steamid64, sizeof(steamid64)) && TryGetSelectedTag(client, steamid64, selectedTag, sizeof(selectedTag)))
+    {
+        BuildClanDisplayTag(selectedTag, selectedDisplayTag, sizeof(selectedDisplayTag));
+    }
+
+    char senderName[384];
+    BuildClanChatSenderName(client, senderName, sizeof(senderName));
+
+    char output[768];
+    if (clanDisplayTag[0] && selectedDisplayTag[0])
+    {
+        FormatEx(output, sizeof(output), "%s %s %s %s", clanDisplayTag, selectedDisplayTag, senderName, message);
+    }
+    else if (clanDisplayTag[0])
+    {
+        FormatEx(output, sizeof(output), "%s %s %s", clanDisplayTag, senderName, message);
+    }
+    else if (selectedDisplayTag[0])
+    {
+        FormatEx(output, sizeof(output), "%s %s %s", selectedDisplayTag, senderName, message);
+    }
+    else
+    {
+        FormatEx(output, sizeof(output), "%s %s", senderName, message);
+    }
+
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (!IsConnectedClientInClan(i, clanId))
+        {
+            continue;
+        }
+
+        CPrintToChat(i, "%s", output);
+    }
 }
 
 public void SQL_OnClansListMenu(Database db, DBResultSet results, const char[] error, any data)
