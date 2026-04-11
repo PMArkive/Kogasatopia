@@ -1142,6 +1142,47 @@ bool GetCachedClanIdForSteam64(const char[] steamid64, int &clanId)
     return (g_hClanIdCache != null && steamid64[0] != '\0' && g_hClanIdCache.GetValue(steamid64, clanId));
 }
 
+bool ResolveClanIdForSteam64Sync(const char[] steamid64, int &clanId)
+{
+    clanId = 0;
+
+    if (!steamid64[0] || !EnsureDatabaseReady())
+    {
+        return false;
+    }
+
+    if (GetCachedClanIdForSteam64(steamid64, clanId))
+    {
+        return true;
+    }
+
+    char escapedSteam[SQL_STEAMID64_MAXLEN];
+    EscapeSql(steamid64, escapedSteam, sizeof(escapedSteam));
+
+    char query[256];
+    FormatEx(query, sizeof(query),
+        "SELECT clan_id FROM clan_members WHERE steamid64 = '%s' LIMIT 1",
+        escapedSteam);
+
+    DBResultSet results = SQL_Query(g_Database, query);
+    if (results == null)
+    {
+        char error[256];
+        SQL_GetError(g_Database, error, sizeof(error));
+        LogError("[Clans] Failed to resolve clan id for %s: %s", steamid64, error);
+        return false;
+    }
+
+    if (results.FetchRow())
+    {
+        clanId = results.FetchInt(0);
+    }
+
+    delete results;
+    UpdateClanIdCacheEntry(steamid64, clanId);
+    return true;
+}
+
 void UpdateClanIdCacheEntry(const char[] steamid64, int clanId)
 {
     if (steamid64[0] == '\0')
@@ -3588,7 +3629,7 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
 
     int attackerClanId = 0;
     int victimClanId = 0;
-    if (!GetCachedClanIdForSteam64(attackerSteam, attackerClanId) || !GetCachedClanIdForSteam64(victimSteam, victimClanId))
+    if (!ResolveClanIdForSteam64Sync(attackerSteam, attackerClanId) || !ResolveClanIdForSteam64Sync(victimSteam, victimClanId))
     {
         return;
     }
