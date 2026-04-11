@@ -2474,29 +2474,29 @@ bool StartClanWarSync(int declaringClanId, int targetClanId, const char[] declar
         return false;
     }
 
-    char clanNameA[CLAN_NAME_MAXLEN + 1];
-    char clanTagA[CLAN_TAG_STORE_MAXLEN];
-    char ownerNameA[MAX_NAME_LENGTH * 2];
-    char clanNameB[CLAN_NAME_MAXLEN + 1];
-    char clanTagB[CLAN_TAG_STORE_MAXLEN];
-    char ownerNameB[MAX_NAME_LENGTH * 2];
+    char declaringClanName[CLAN_NAME_MAXLEN + 1];
+    char declaringClanTag[CLAN_TAG_STORE_MAXLEN];
+    char declaringOwnerName[MAX_NAME_LENGTH * 2];
+    char targetClanName[CLAN_NAME_MAXLEN + 1];
+    char targetClanTag[CLAN_TAG_STORE_MAXLEN];
+    char targetOwnerName[MAX_NAME_LENGTH * 2];
     int memberCount = 0;
 
-    GetClanInfoSummarySync(clanIdA, clanNameA, sizeof(clanNameA), clanTagA, sizeof(clanTagA), ownerNameA, sizeof(ownerNameA), memberCount);
-    GetClanInfoSummarySync(clanIdB, clanNameB, sizeof(clanNameB), clanTagB, sizeof(clanTagB), ownerNameB, sizeof(ownerNameB), memberCount);
+    GetClanInfoSummarySync(declaringClanId, declaringClanName, sizeof(declaringClanName), declaringClanTag, sizeof(declaringClanTag), declaringOwnerName, sizeof(declaringOwnerName), memberCount);
+    GetClanInfoSummarySync(targetClanId, targetClanName, sizeof(targetClanName), targetClanTag, sizeof(targetClanTag), targetOwnerName, sizeof(targetOwnerName), memberCount);
 
-    char historyLabelA[96];
-    char historyLabelB[96];
-    char announceLabelA[96];
-    char announceLabelB[96];
-    BuildClanHistoryTagLabel(clanTagA, clanNameA, historyLabelA, sizeof(historyLabelA));
-    BuildClanHistoryTagLabel(clanTagB, clanNameB, historyLabelB, sizeof(historyLabelB));
-    BuildClanWarTagLabel(clanTagA, clanNameA, announceLabelA, sizeof(announceLabelA));
-    BuildClanWarTagLabel(clanTagB, clanNameB, announceLabelB, sizeof(announceLabelB));
+    char declaringHistoryLabel[96];
+    char targetHistoryLabel[96];
+    char declaringAnnounceLabel[96];
+    char targetAnnounceLabel[96];
+    BuildClanHistoryTagLabel(declaringClanTag, declaringClanName, declaringHistoryLabel, sizeof(declaringHistoryLabel));
+    BuildClanHistoryTagLabel(targetClanTag, targetClanName, targetHistoryLabel, sizeof(targetHistoryLabel));
+    BuildClanWarTagLabel(declaringClanTag, declaringClanName, declaringAnnounceLabel, sizeof(declaringAnnounceLabel));
+    BuildClanWarTagLabel(targetClanTag, targetClanName, targetAnnounceLabel, sizeof(targetAnnounceLabel));
 
-    AddClanHistoryEntry(clanIdA, "Declared war on %s", historyLabelB);
-    AddClanHistoryEntry(clanIdB, "War declared by %s", historyLabelA);
-    CPrintToChatAll("{gold}[Clans]{default} %s has declared war on %s!", announceLabelA, announceLabelB);
+    AddClanHistoryEntry(declaringClanId, "Declared war on %s", targetHistoryLabel);
+    AddClanHistoryEntry(targetClanId, "War declared by %s", declaringHistoryLabel);
+    CPrintToChatAll("{gold}[Clans]{default} %s has declared war on %s!", declaringAnnounceLabel, targetAnnounceLabel);
 
     return true;
 }
