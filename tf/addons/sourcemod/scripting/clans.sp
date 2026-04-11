@@ -12,7 +12,7 @@
 
 #define CLAN_CREATE_COST          250
 #define INVITE_EXPIRE_SECONDS     604800
-#define CLAN_NAME_MAXLEN          24
+#define CLAN_NAME_MAXLEN          48
 #define CLAN_DESC_MAXLEN          128
 #define CLAN_TAG_MAXLEN           64
 #define CLAN_TAG_STORE_MAXLEN     (CLAN_TAG_MAXLEN + 1)

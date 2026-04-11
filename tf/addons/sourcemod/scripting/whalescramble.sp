@@ -3,6 +3,7 @@
 #include <morecolors>
 #include <nativevotes>
 #include <tf2_stocks>
+#include <clans_api>
 #include <whaletracker_api>
 
 #pragma semicolon 1
@@ -66,6 +67,7 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 {
     MarkNativeAsOptional("FilterAlerts_SuppressTeamAlertWindow");
     MarkNativeAsOptional("Filters_GetChatName");
+    MarkNativeAsOptional("Clans_GetSameTeamClanMemberCount");
     MarkNativeAsOptional("WhaleTracker_IsCurrentRoundMvp");
     return APLRes_Success;
 }
@@ -1117,6 +1119,11 @@ static bool IsScrambleImmune(int client)
         return true;
     }
 
+    if (HasClanTeammateProtection(client))
+    {
+        return true;
+    }
+
     char steamId[32];
     if (!GetClientAuthId(client, AuthId_SteamID64, steamId, sizeof(steamId)))
     {
@@ -1135,6 +1142,17 @@ static bool IsClientCurrentRoundMvpSafe(int client)
     }
 
     return WhaleTracker_IsCurrentRoundMvp(client);
+}
+
+static bool HasClanTeammateProtection(int client)
+{
+    if (GetFeatureStatus(FeatureType_Native, "Clans_GetSameTeamClanMemberCount") != FeatureStatus_Available)
+    {
+        return false;
+    }
+
+    int count = Clans_GetSameTeamClanMemberCount(client);
+    return (count < 0 || count > 1);
 }
 
 static void MarkScrambleImmune(int client)
