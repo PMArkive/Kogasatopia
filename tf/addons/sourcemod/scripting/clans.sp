@@ -2352,15 +2352,15 @@ public void SQL_OnClanChatContext(Database db, DBResultSet results, const char[]
     char output[768];
     if (clanDisplayTag[0] && selectedDisplayTag[0])
     {
-        FormatEx(output, sizeof(output), "%s %s %s %s", clanDisplayTag, selectedDisplayTag, senderName, message);
+        FormatEx(output, sizeof(output), "%s %s %s: %s", clanDisplayTag, selectedDisplayTag, senderName, message);
     }
     else if (clanDisplayTag[0])
     {
-        FormatEx(output, sizeof(output), "%s %s %s", clanDisplayTag, senderName, message);
+        FormatEx(output, sizeof(output), "%s %s: %s", clanDisplayTag, senderName, message);
     }
     else if (selectedDisplayTag[0])
     {
-        FormatEx(output, sizeof(output), "%s %s %s", selectedDisplayTag, senderName, message);
+        FormatEx(output, sizeof(output), "%s %s: %s", selectedDisplayTag, senderName, message);
     }
     else
     {
