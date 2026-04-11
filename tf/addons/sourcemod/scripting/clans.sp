@@ -4581,7 +4581,7 @@ public void SQL_OnClanMembersList(Database db, DBResultSet results, const char[]
     CPrintToChat(client, "{default}[Clans] Members of %s:", clanName);
 
     ArrayList onlineMembers = new ArrayList(ByteCountToCells(512));
-    ArrayList offlineMembers = new ArrayList(ByteCountToCells(512));
+    ArrayList offlineMembers = new ArrayList(ByteCountToCells(768));
 
     if (results != null)
     {
@@ -4601,6 +4601,18 @@ public void SQL_OnClanMembersList(Database db, DBResultSet results, const char[]
             }
             else
             {
+                int lastSeen = WhaleTracker_GetLastSeen(steamid64);
+                char lastSeenText[64];
+                if (lastSeen > 0)
+                {
+                    FormatTime(lastSeenText, sizeof(lastSeenText), "%Y-%m-%d %H:%M:%S", lastSeen);
+                }
+                else
+                {
+                    strcopy(lastSeenText, sizeof(lastSeenText), "Unknown");
+                }
+
+                FormatEx(line, sizeof(line), "%s\n    {default}Last seen: %s", line, lastSeenText);
                 offlineMembers.PushString(line);
             }
         }
