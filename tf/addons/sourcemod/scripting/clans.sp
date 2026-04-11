@@ -1960,6 +1960,8 @@ void BuildClanHistoryTagLabel(const char[] storedTag, const char[] clanName, cha
     }
 
     strcopy(buffer, maxlen, clanName);
+    CRemoveTags(buffer, maxlen);
+    TrimString(buffer);
 }
 
 void BuildWarPlayerLabel(int client, char[] buffer, int maxlen)
@@ -2203,6 +2205,7 @@ void AddClanHistoryEntry(int clanId, const char[] fmt, any ...)
     char summary[CLAN_HISTORY_SUMMARY_MAXLEN + 1];
     char escapedSummary[SQL_CLAN_HISTORY_SUMMARY_MAXLEN];
     VFormat(summary, sizeof(summary), fmt, 3);
+    CRemoveTags(summary, sizeof(summary));
     TrimString(summary);
 
     if (!summary[0])
@@ -2212,7 +2215,7 @@ void AddClanHistoryEntry(int clanId, const char[] fmt, any ...)
 
     EscapeSql(summary, escapedSummary, sizeof(escapedSummary));
 
-    char query[512];
+    char query[768];
     FormatEx(query, sizeof(query),
         "INSERT INTO clan_history (clan_id, summary, created_at) VALUES (%d, '%s', %d)",
         clanId,
