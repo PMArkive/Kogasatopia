@@ -287,6 +287,8 @@ public void OnPluginStart()
     RegConsoleCmd("sm_clanparent", Command_ClanParent, "Set or clear your clan's parent relation.");
     RegConsoleCmd("sm_clanmembers", Command_ClanMembers, "Show clan members.");
     RegConsoleCmd("sm_claninfo", Command_ClanInfo, "Show clan info.");
+    RegConsoleCmd("sm_clanpts", Command_ClanPoints, "Show merged Whale Points for a clan.");
+    RegConsoleCmd("sm_clanpoints", Command_ClanPoints, "Show merged Whale Points for a clan.");
     RegConsoleCmd("sm_claninvites", Command_ClanInvites, "Show pending clan invites.");
     RegConsoleCmd("sm_clandesc", Command_ClanDesc, "Set your clan description.");
     RegConsoleCmd("sm_clanrename", Command_ClanRename, "Rename your clan.");
@@ -1634,9 +1636,43 @@ void GetClanInfoById(int clanId, SQLQueryCallback callback, any data = 0)
         ... "FROM clan_members cm_child "
         ... "INNER JOIN clan_relations cr ON cr.clan_id_a = cm_child.clan_id "
         ... "WHERE cr.relation_type = 3 AND cr.clan_id_b = c.id"
-        ... ") AS member_count "
+        ... ") AS member_count, "
+        ... "(SELECT COALESCE(SUM(COALESCE(pc.points, 0)), 0) "
+        ... "FROM clan_members cm "
+        ... "LEFT JOIN whaletracker_points_cache pc ON pc.steamid = cm.steamid64 "
+        ... "WHERE cm.clan_id = c.id "
+        ... "OR cm.clan_id IN (SELECT cr.clan_id_a FROM clan_relations cr WHERE cr.relation_type = 3 AND cr.clan_id_b = c.id)) AS cached_points "
         ... "FROM clans c "
         ... "WHERE c.id = %d "
+        ... "LIMIT 1",
+        clanId);
+    g_Database.Query(callback, query, data);
+}
+
+void QueryClanMergedWhaleStatsById(int clanId, SQLQueryCallback callback, any data = 0)
+{
+    if (!EnsureDatabaseReady())
+    {
+        return;
+    }
+
+    char query[1536];
+    FormatEx(query, sizeof(query),
+        "SELECT c.id, c.name, "
+        ... "COALESCE(SUM(COALESCE(w.kills, 0)), 0), "
+        ... "COALESCE(SUM(COALESCE(w.deaths, 0)), 0), "
+        ... "COALESCE(SUM(COALESCE(w.assists, 0)), 0), "
+        ... "COALESCE(SUM(COALESCE(w.total_ubers, 0)), 0), "
+        ... "COALESCE(SUM(COALESCE(w.damage_dealt, 0)), 0), "
+        ... "COALESCE(SUM(COALESCE(w.healing, 0)), 0), "
+        ... "COALESCE(SUM(COALESCE(w.playtime, 0)), 0) "
+        ... "FROM clans c "
+        ... "LEFT JOIN clan_members cm "
+        ... "ON (cm.clan_id = c.id "
+        ... "OR cm.clan_id IN (SELECT cr.clan_id_a FROM clan_relations cr WHERE cr.relation_type = 3 AND cr.clan_id_b = c.id)) "
+        ... "LEFT JOIN whaletracker w ON w.steamid = cm.steamid64 "
+        ... "WHERE c.id = %d "
+        ... "GROUP BY c.id, c.name "
         ... "LIMIT 1",
         clanId);
     g_Database.Query(callback, query, data);
@@ -3923,7 +3959,12 @@ public Action Command_ClansList(int client, int args)
         ... "FROM clan_members cm_child "
         ... "INNER JOIN clan_relations cr ON cr.clan_id_a = cm_child.clan_id "
         ... "WHERE cr.relation_type = 3 AND cr.clan_id_b = c.id"
-        ... ") AS member_count "
+        ... ") AS member_count, "
+        ... "(SELECT COALESCE(SUM(COALESCE(pc.points, 0)), 0) "
+        ... "FROM clan_members cm "
+        ... "LEFT JOIN whaletracker_points_cache pc ON pc.steamid = cm.steamid64 "
+        ... "WHERE cm.clan_id = c.id "
+        ... "OR cm.clan_id IN (SELECT cr.clan_id_a FROM clan_relations cr WHERE cr.relation_type = 3 AND cr.clan_id_b = c.id)) AS cached_points "
         ... "FROM clans c "
         ... "ORDER BY member_count DESC, c.name ASC");
 
@@ -4634,6 +4675,7 @@ public void SQL_OnClansListMenu(Database db, DBResultSet results, const char[] e
         {
             int clanId = results.FetchInt(0);
             int memberCount = results.FetchInt(3);
+            int cachedPoints = results.FetchInt(4);
 
             char name[CLAN_NAME_MAXLEN + 1];
             char tag[CLAN_TAG_STORE_MAXLEN];
@@ -4646,11 +4688,11 @@ public void SQL_OnClansListMenu(Database db, DBResultSet results, const char[] e
 
             if (tag[0])
             {
-                FormatEx(display, sizeof(display), "%s %s (%d)", name, tag, memberCount);
+                FormatEx(display, sizeof(display), "%s %s (%d, %d pts)", name, tag, memberCount, cachedPoints);
             }
             else
             {
-                FormatEx(display, sizeof(display), "%s (%d)", name, memberCount);
+                FormatEx(display, sizeof(display), "%s (%d, %d pts)", name, memberCount, cachedPoints);
             }
 
             CRemoveTags(display, sizeof(display));
@@ -4717,10 +4759,10 @@ public void SQL_OnClanInfoMenu(Database db, DBResultSet results, const char[] er
     char title[192];
     char line[256];
 
-    results.FetchString(0, clanName, sizeof(clanName));
-    results.FetchString(1, clanTag, sizeof(clanTag));
-    results.FetchString(2, ownerSteam, sizeof(ownerSteam));
-    results.FetchString(3, description, sizeof(description));
+    results.FetchString(1, clanName, sizeof(clanName));
+    results.FetchString(2, clanTag, sizeof(clanTag));
+    results.FetchString(3, ownerSteam, sizeof(ownerSteam));
+    results.FetchString(4, description, sizeof(description));
     ResolvePlayerDisplayName(ownerSteam, ownerName, sizeof(ownerName));
 
     Menu menu = new Menu(MenuHandler_ClanInfoMenu);
@@ -4736,8 +4778,11 @@ public void SQL_OnClanInfoMenu(Database db, DBResultSet results, const char[] er
     FormatEx(line, sizeof(line), "Desc: %s", description[0] ? description : "(none)");
     menu.AddItem("desc", line, ITEMDRAW_DISABLED);
 
-    FormatEx(line, sizeof(line), "Member count: %d", results.FetchInt(4));
+    FormatEx(line, sizeof(line), "Member count: %d", results.FetchInt(5));
     menu.AddItem("members", line, ITEMDRAW_DISABLED);
+
+    FormatEx(line, sizeof(line), "Cached points: %d", results.FetchInt(6));
+    menu.AddItem("points", line, ITEMDRAW_DISABLED);
 
     menu.ExitButton = true;
     menu.Display(client, CLAN_MENU_TIME);
@@ -5457,8 +5502,184 @@ public void SQL_OnClanInfoById(Database db, DBResultSet results, const char[] er
     CPrintToChat(client, "{default}[Clans] Clan tag: %s", clanTag[0] ? clanTag : "(none)");
     CPrintToChat(client, "{default}[Clans] Desc: %s", description[0] ? description : "(none)");
     CPrintToChat(client, "{default}[Clans] Member count: %d", results.FetchInt(5));
+    CPrintToChat(client, "{default}[Clans] Cached points: %d", results.FetchInt(6));
 
     QueryClanMembersListForClient(data, clanId, clanName);
+}
+
+public Action Command_ClanPoints(int client, int args)
+{
+    if (client <= 0)
+    {
+        ReplyToCommand(client, "[Clans] This command can only be used by players.");
+        return Plugin_Handled;
+    }
+
+    if (!EnsureDatabaseReady(client))
+    {
+        return Plugin_Handled;
+    }
+
+    if (args < 1)
+    {
+        ReplyToCommand(client, "[Clans] Usage: sm_clanpts <clan name or online player>");
+        return Plugin_Handled;
+    }
+
+    char input[192];
+    GetCmdArgString(input, sizeof(input));
+    StripQuotes(input);
+    TrimString(input);
+
+    if (!input[0])
+    {
+        ReplyToCommand(client, "[Clans] Usage: sm_clanpts <clan name or online player>");
+        return Plugin_Handled;
+    }
+
+    char escapedInput[256];
+    EscapeSql(input, escapedInput, sizeof(escapedInput));
+
+    char query[1024];
+    FormatEx(query, sizeof(query),
+        "SELECT c.id, c.name "
+        ... "FROM clans c "
+        ... "WHERE LOWER(c.name) = LOWER('%s') "
+        ... "OR LOWER(c.name) LIKE LOWER('%s%%') "
+        ... "OR LOWER(c.name) LIKE LOWER('%%%s%%') "
+        ... "ORDER BY CASE "
+        ... "WHEN LOWER(c.name) = LOWER('%s') THEN 0 "
+        ... "WHEN LOWER(c.name) LIKE LOWER('%s%%') THEN 1 "
+        ... "ELSE 2 END, c.name ASC "
+        ... "LIMIT 2",
+        escapedInput,
+        escapedInput,
+        escapedInput,
+        escapedInput,
+        escapedInput);
+
+    DataPack pack = new DataPack();
+    pack.WriteCell(GetClientUserId(client));
+    pack.WriteString(input);
+
+    g_Database.Query(SQL_OnClanPointsSearchLookup, query, pack);
+    return Plugin_Handled;
+}
+
+public void SQL_OnClanPointsSearchLookup(Database db, DBResultSet results, const char[] error, any data)
+{
+    DataPack pack = view_as<DataPack>(data);
+    pack.Reset();
+
+    int userId = pack.ReadCell();
+    char input[192];
+    pack.ReadString(input, sizeof(input));
+    delete pack;
+
+    int client = GetClientOfUserId(userId);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Clan points search failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to look up clan points.");
+        return;
+    }
+
+    if (results != null && results.FetchRow())
+    {
+        int clanId = results.FetchInt(0);
+        char matchedName[CLAN_NAME_MAXLEN + 1];
+        results.FetchString(1, matchedName, sizeof(matchedName));
+
+        if (!StrEqual(matchedName, input, false) && results.FetchRow())
+        {
+            PrintToChat(client, "[Clans] Multiple clans matched that query.");
+            return;
+        }
+
+        QueryClanMergedWhaleStatsById(clanId, SQL_OnClanPointsById, userId);
+        return;
+    }
+
+    int target = FindClientByNameQuery(input);
+    if (target <= 0)
+    {
+        PrintToChat(client, "[Clans] No clan or online player matched that query.");
+        return;
+    }
+
+    char steamid64[STEAMID64_MAXLEN];
+    if (!GetClientSteam64(target, steamid64, sizeof(steamid64)))
+    {
+        PrintToChat(client, "[Clans] Could not read that player's SteamID64.");
+        return;
+    }
+
+    GetClanByPlayer(steamid64, SQL_OnClanPointsPlayerLookup, userId);
+}
+
+public void SQL_OnClanPointsPlayerLookup(Database db, DBResultSet results, const char[] error, any data)
+{
+    int client = GetClientOfUserId(data);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Clan points player lookup failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to look up clan points.");
+        return;
+    }
+
+    if (results == null || !results.FetchRow())
+    {
+        PrintToChat(client, "[Clans] That player is not in a clan.");
+        return;
+    }
+
+    QueryClanMergedWhaleStatsById(results.FetchInt(ClanByPlayerCol_Id), SQL_OnClanPointsById, data);
+}
+
+public void SQL_OnClanPointsById(Database db, DBResultSet results, const char[] error, any data)
+{
+    int client = GetClientOfUserId(data);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Clan points aggregate query failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to calculate clan points.");
+        return;
+    }
+
+    if (results == null || !results.FetchRow())
+    {
+        PrintToChat(client, "[Clans] Clan not found.");
+        return;
+    }
+
+    char clanName[CLAN_NAME_MAXLEN + 1];
+    results.FetchString(1, clanName, sizeof(clanName));
+
+    int points = WhaleTracker_ComputeWhalePoints(
+        results.FetchInt(2),
+        results.FetchInt(3),
+        results.FetchInt(4),
+        results.FetchInt(5),
+        results.FetchInt(6),
+        results.FetchInt(7),
+        results.FetchInt(8));
+
+    CPrintToChat(client, "{default}[Clans] %s merged points: %d", clanName, points);
 }
 
 public void SQL_OnClanMembersContext(Database db, DBResultSet results, const char[] error, any data)
