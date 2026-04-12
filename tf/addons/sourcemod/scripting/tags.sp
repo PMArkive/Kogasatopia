@@ -38,6 +38,7 @@ public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int err_max)
     RegPluginLibrary("tags");
     CreateNative("Tags_GetTag", Native_Tags_GetTag);
     CreateNative("Tags_GetSelectedTag", Native_Tags_GetSelectedTag);
+    CreateNative("Tags_SetSelectedTag", Native_Tags_SetSelectedTag);
     MarkNativeAsOptional("CustomHats_GetPrefix");
     MarkNativeAsOptional("Clans_GetTags");
     return APLRes_Success;
@@ -601,4 +602,22 @@ public any Native_Tags_GetSelectedTag(Handle plugin, int numParams)
 
     SetNativeString(2, buffer, maxlen, true);
     return found;
+}
+
+public any Native_Tags_SetSelectedTag(Handle plugin, int numParams)
+{
+    int client = GetNativeCell(1);
+
+    char tag[TAG_VALUE_MAXLEN];
+    tag[0] = '\0';
+    GetNativeString(2, tag, sizeof(tag));
+    TrimString(tag);
+
+    if (client <= 0 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client) || !tag[0])
+    {
+        return false;
+    }
+
+    SetClientSelectedTag(client, tag);
+    return true;
 }

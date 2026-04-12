@@ -244,11 +244,13 @@ public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int err_max)
     CreateNative("Clans_GetSameTeamClanMemberCount", Native_Clans_GetSameTeamClanMemberCount);
     MarkNativeAsOptional("Filters_GetChatName");
     MarkNativeAsOptional("Tags_GetTag");
+    MarkNativeAsOptional("Tags_SetSelectedTag");
     return APLRes_Success;
 }
 
 native bool Filters_GetChatName(int client, char[] buffer, int maxlen);
 native bool Tags_GetTag(int client, const char[] steamid64, char[] buffer, int maxlen);
+native bool Tags_SetSelectedTag(int client, const char[] tag);
 
 Database g_Database = null;
 bool g_bDatabaseReady = false;
@@ -893,6 +895,29 @@ static bool TryGetSelectedTag(int client, const char[] steamid64, char[] buffer,
     }
 
     return Tags_GetTag(0, steamid64, buffer, maxlen) && buffer[0] != '\0';
+}
+
+static void TrySetClanJoinSelectedTag(int client, const char[] clanTag)
+{
+    if (client <= 0 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
+    {
+        return;
+    }
+
+    if (GetFeatureStatus(FeatureType_Native, "Tags_SetSelectedTag") != FeatureStatus_Available)
+    {
+        return;
+    }
+
+    char trimmedTag[CLAN_TAG_STORE_MAXLEN];
+    strcopy(trimmedTag, sizeof(trimmedTag), clanTag);
+    TrimString(trimmedTag);
+    if (!trimmedTag[0])
+    {
+        return;
+    }
+
+    Tags_SetSelectedTag(client, trimmedTag);
 }
 
 static void BuildClanDisplayTag(const char[] rawTag, char[] buffer, int maxlen)
@@ -7608,8 +7633,10 @@ void StartJoinOpenClan(int client, int clanId)
         "SELECT "
         ... "(SELECT COUNT(1) FROM clan_members WHERE steamid64 = '%s') AS in_clan, "
         ... "(SELECT COUNT(1) FROM clans WHERE id = %d AND is_open = 1) AS clan_open, "
-        ... "(SELECT name FROM clans WHERE id = %d LIMIT 1) AS clan_name",
+        ... "(SELECT name FROM clans WHERE id = %d LIMIT 1) AS clan_name, "
+        ... "(SELECT COALESCE(tag, '') FROM clans WHERE id = %d LIMIT 1) AS clan_tag",
         escapedSteam,
+        clanId,
         clanId,
         clanId);
 
@@ -7665,11 +7692,14 @@ public void SQL_OnJoinOpenClanValidate(Database db, DBResultSet results, const c
 
     char clanName[CLAN_NAME_MAXLEN + 1];
     results.FetchString(2, clanName, sizeof(clanName));
+    char clanTag[CLAN_TAG_STORE_MAXLEN];
+    results.FetchString(3, clanTag, sizeof(clanTag));
 
     DataPack next = new DataPack();
     next.WriteCell(userId);
-    next.WriteString(clanName);
     next.WriteCell(clanId);
+    next.WriteString(clanName);
+    next.WriteString(clanTag);
     next.WriteString(steamid64);
 
     AddClanMember(clanId, steamid64, SQL_OnJoinOpenClanSuccess, next, ClanRank_Member);
@@ -7681,10 +7711,12 @@ public void SQL_OnJoinOpenClanSuccess(Database db, DBResultSet results, const ch
     pack.Reset();
 
     int userId = pack.ReadCell();
-    char clanName[CLAN_NAME_MAXLEN + 1];
     int clanId = pack.ReadCell();
+    char clanName[CLAN_NAME_MAXLEN + 1];
+    char clanTag[CLAN_TAG_STORE_MAXLEN];
     char steamid64[STEAMID64_MAXLEN];
     pack.ReadString(clanName, sizeof(clanName));
+    pack.ReadString(clanTag, sizeof(clanTag));
     pack.ReadString(steamid64, sizeof(steamid64));
     delete pack;
 
@@ -7712,6 +7744,7 @@ public void SQL_OnJoinOpenClanSuccess(Database db, DBResultSet results, const ch
     {
         SetClientClanIdBySteam64(steamid64, clanId);
     }
+    TrySetClanJoinSelectedTag(client, clanTag);
 
     char memberName[MAX_NAME_LENGTH * 2];
     ResolvePlayerDisplayName(steamid64, memberName, sizeof(memberName));
@@ -8375,8 +8408,12 @@ void StartAcceptInvite(int client, int inviteId)
         ... "(SELECT COUNT(1) FROM clan_members WHERE steamid64 = '%s') AS in_clan, "
         ... "(SELECT COUNT(1) FROM clan_invites WHERE id = %d AND steamid64 = '%s' AND expires_at > %d) AS invite_ok, "
         ... "(SELECT clan_id FROM clan_invites WHERE id = %d AND steamid64 = '%s' AND expires_at > %d LIMIT 1) AS clan_id, "
-        ... "(SELECT name FROM clans WHERE id = (SELECT clan_id FROM clan_invites WHERE id = %d AND steamid64 = '%s' AND expires_at > %d LIMIT 1) LIMIT 1) AS clan_name",
+        ... "(SELECT name FROM clans WHERE id = (SELECT clan_id FROM clan_invites WHERE id = %d AND steamid64 = '%s' AND expires_at > %d LIMIT 1) LIMIT 1) AS clan_name, "
+        ... "(SELECT COALESCE(tag, '') FROM clans WHERE id = (SELECT clan_id FROM clan_invites WHERE id = %d AND steamid64 = '%s' AND expires_at > %d LIMIT 1) LIMIT 1) AS clan_tag",
         escapedSteam,
+        inviteId,
+        escapedSteam,
+        now,
         inviteId,
         escapedSteam,
         now,
@@ -8446,6 +8483,8 @@ public void SQL_OnAcceptInviteValidate(Database db, DBResultSet results, const c
 
     char clanName[CLAN_NAME_MAXLEN + 1];
     results.FetchString(3, clanName, sizeof(clanName));
+    char clanTag[CLAN_TAG_STORE_MAXLEN];
+    results.FetchString(4, clanTag, sizeof(clanTag));
 
     char escapedSteam[SQL_STEAMID64_MAXLEN];
     EscapeSql(steamid64, escapedSteam, sizeof(escapedSteam));
@@ -8480,6 +8519,7 @@ public void SQL_OnAcceptInviteValidate(Database db, DBResultSet results, const c
     next.WriteCell(userId);
     next.WriteString(steamid64);
     next.WriteString(clanName);
+    next.WriteString(clanTag);
     next.WriteCell(clanId);
 
     g_Database.Execute(txn, SQLTxn_OnAcceptInviteSuccess, SQLTxn_OnAcceptInviteFailure, next);
@@ -8493,8 +8533,10 @@ public void SQLTxn_OnAcceptInviteSuccess(Database db, any data, int numQueries, 
     int userId = pack.ReadCell();
     char steamid64[STEAMID64_MAXLEN];
     char fallbackClanName[CLAN_NAME_MAXLEN + 1];
+    char clanTag[CLAN_TAG_STORE_MAXLEN];
     pack.ReadString(steamid64, sizeof(steamid64));
     pack.ReadString(fallbackClanName, sizeof(fallbackClanName));
+    pack.ReadString(clanTag, sizeof(clanTag));
     int clanId = pack.ReadCell();
     delete pack;
 
@@ -8508,6 +8550,8 @@ public void SQLTxn_OnAcceptInviteSuccess(Database db, any data, int numQueries, 
     {
         return;
     }
+
+    TrySetClanJoinSelectedTag(client, clanTag);
 
     char escapedSteam[SQL_STEAMID64_MAXLEN];
     EscapeSql(steamid64, escapedSteam, sizeof(escapedSteam));
@@ -8534,8 +8578,10 @@ public void SQLTxn_OnAcceptInviteFailure(Database db, any data, int numQueries, 
     int userId = pack.ReadCell();
     char ignoredSteam[STEAMID64_MAXLEN];
     char ignoredClan[CLAN_NAME_MAXLEN + 1];
+    char ignoredTag[CLAN_TAG_STORE_MAXLEN];
     pack.ReadString(ignoredSteam, sizeof(ignoredSteam));
     pack.ReadString(ignoredClan, sizeof(ignoredClan));
+    pack.ReadString(ignoredTag, sizeof(ignoredTag));
     pack.ReadCell();
     delete pack;
 
