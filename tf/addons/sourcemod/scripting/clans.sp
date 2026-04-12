@@ -3,6 +3,7 @@
 
 #include <sourcemod>
 #include <morecolors>
+#include <tf2_stocks>
 #include <whaletracker_api>
 
 #define PLUGIN_NAME               "Clans"
@@ -118,6 +119,8 @@ enum struct ActiveClanWar
     int pendingDeltaA;
     int pendingDeltaB;
     int expiresAt;
+    char announceLabelA[96];
+    char announceLabelB[96];
 }
 
 static void StripClanChatPrefix(const char[] input, char[] output, int maxlen)
@@ -2088,6 +2091,37 @@ bool GetActiveClanWarByPairCached(int firstClanId, int secondClanId, int &warId,
     return true;
 }
 
+bool PopulateActiveWarLabels(ActiveClanWar war)
+{
+    char clanNameA[CLAN_NAME_MAXLEN + 1];
+    char clanTagA[CLAN_TAG_STORE_MAXLEN];
+    char ownerNameA[MAX_NAME_LENGTH * 2];
+    char clanNameB[CLAN_NAME_MAXLEN + 1];
+    char clanTagB[CLAN_TAG_STORE_MAXLEN];
+    char ownerNameB[MAX_NAME_LENGTH * 2];
+    int memberCount = 0;
+
+    war.announceLabelA[0] = '\0';
+    war.announceLabelB[0] = '\0';
+
+    if (!GetClanInfoSummarySync(war.clanIdA, clanNameA, sizeof(clanNameA), clanTagA, sizeof(clanTagA), ownerNameA, sizeof(ownerNameA), memberCount))
+    {
+        FormatEx(war.announceLabelA, sizeof(war.announceLabelA), "[%d]", war.clanIdA);
+        return false;
+    }
+
+    if (!GetClanInfoSummarySync(war.clanIdB, clanNameB, sizeof(clanNameB), clanTagB, sizeof(clanTagB), ownerNameB, sizeof(ownerNameB), memberCount))
+    {
+        BuildClanWarTagLabel(clanTagA, clanNameA, war.announceLabelA, sizeof(war.announceLabelA));
+        FormatEx(war.announceLabelB, sizeof(war.announceLabelB), "[%d]", war.clanIdB);
+        return false;
+    }
+
+    BuildClanWarTagLabel(clanTagA, clanNameA, war.announceLabelA, sizeof(war.announceLabelA));
+    BuildClanWarTagLabel(clanTagB, clanNameB, war.announceLabelB, sizeof(war.announceLabelB));
+    return true;
+}
+
 void UpsertActiveWarCacheEntry(int warId, int clanIdA, int clanIdB, int scoreA, int scoreB, int expiresAt)
 {
     if (warId <= 0 || clanIdA <= 0 || clanIdB <= 0)
@@ -2115,6 +2149,7 @@ void UpsertActiveWarCacheEntry(int warId, int clanIdA, int clanIdB, int scoreA, 
     war.pendingDeltaA = 0;
     war.pendingDeltaB = 0;
     war.expiresAt = expiresAt;
+    PopulateActiveWarLabels(war);
 
     if (index == -1)
     {
@@ -2255,12 +2290,67 @@ bool LoadActiveClanWarsCacheSync()
         war.pendingDeltaA = 0;
         war.pendingDeltaB = 0;
         war.expiresAt = results.FetchInt(5);
+        PopulateActiveWarLabels(war);
         g_hActiveWars.PushArray(war);
     }
 
     delete results;
     g_bActiveWarCacheReady = true;
     return true;
+}
+
+bool EnsureActiveWarCacheEntryForPairSync(int firstClanId, int secondClanId, int &index)
+{
+    index = FindActiveWarIndexByPair(firstClanId, secondClanId);
+    if (index != -1)
+    {
+        return true;
+    }
+
+    if (!EnsureDatabaseReady() || firstClanId <= 0 || secondClanId <= 0 || firstClanId == secondClanId)
+    {
+        return false;
+    }
+
+    int clanIdA = 0;
+    int clanIdB = 0;
+    NormalizeClanWarPair(firstClanId, secondClanId, clanIdA, clanIdB);
+
+    char query[256];
+    FormatEx(query, sizeof(query),
+        "SELECT id, score_a, score_b, expires_at "
+        ... "FROM clan_wars "
+        ... "WHERE clan_id_a = %d AND clan_id_b = %d AND status = %d AND expires_at > %d "
+        ... "LIMIT 1",
+        clanIdA,
+        clanIdB,
+        view_as<int>(ClanWarStatus_Active),
+        GetTime());
+
+    DBResultSet results = SQL_Query(g_Database, query);
+    if (results == null)
+    {
+        char error[256];
+        SQL_GetError(g_Database, error, sizeof(error));
+        LogError("[Clans] Failed to hydrate active war cache for pair %d/%d: %s", clanIdA, clanIdB, error);
+        return false;
+    }
+
+    if (!results.FetchRow())
+    {
+        delete results;
+        return false;
+    }
+
+    int warId = results.FetchInt(0);
+    int scoreA = results.FetchInt(1);
+    int scoreB = results.FetchInt(2);
+    int expiresAt = results.FetchInt(3);
+    delete results;
+
+    UpsertActiveWarCacheEntry(warId, clanIdA, clanIdB, scoreA, scoreB, expiresAt);
+    index = FindActiveWarIndexByWarId(warId);
+    return (index != -1);
 }
 
 void BuildPlainClanTag(const char[] storedTag, char[] buffer, int maxlen)
@@ -2705,31 +2795,8 @@ bool FinalizeClanWarSync(int warId, int clanIdA, int clanIdB, int scoreA, int sc
     return true;
 }
 
-void BroadcastClanWarScoreUpdate(int scoringClanId, int otherClanId, int scoringScore, int otherScore, int attacker, int victim)
+void BroadcastClanWarScoreUpdate(const char[] scoringLabel, const char[] otherLabel, int scoringClanId, int otherClanId, int scoringScore, int otherScore, int attacker, int victim)
 {
-    char scoringClanName[CLAN_NAME_MAXLEN + 1];
-    char scoringClanTag[CLAN_TAG_STORE_MAXLEN];
-    char scoringOwnerName[MAX_NAME_LENGTH * 2];
-    char otherClanName[CLAN_NAME_MAXLEN + 1];
-    char otherClanTag[CLAN_TAG_STORE_MAXLEN];
-    char otherOwnerName[MAX_NAME_LENGTH * 2];
-    int memberCount = 0;
-
-    if (!GetClanInfoSummarySync(scoringClanId, scoringClanName, sizeof(scoringClanName), scoringClanTag, sizeof(scoringClanTag), scoringOwnerName, sizeof(scoringOwnerName), memberCount))
-    {
-        return;
-    }
-
-    if (!GetClanInfoSummarySync(otherClanId, otherClanName, sizeof(otherClanName), otherClanTag, sizeof(otherClanTag), otherOwnerName, sizeof(otherOwnerName), memberCount))
-    {
-        return;
-    }
-
-    char scoringLabel[96];
-    char otherLabel[96];
-    BuildClanWarTagLabel(scoringClanTag, scoringClanName, scoringLabel, sizeof(scoringLabel));
-    BuildClanWarTagLabel(otherClanTag, otherClanName, otherLabel, sizeof(otherLabel));
-
     char attackerLabel[512];
     char victimLabel[512];
     BuildWarPlayerLabel(attacker, attackerLabel, sizeof(attackerLabel));
@@ -4048,8 +4115,14 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
 {
     int victim = GetClientOfUserId(event.GetInt("userid"));
     int attacker = GetClientOfUserId(event.GetInt("attacker"));
+    int deathFlags = event.GetInt("death_flags");
 
     if (victim <= 0 || victim > MaxClients || attacker <= 0 || attacker > MaxClients || attacker == victim)
+    {
+        return;
+    }
+
+    if (deathFlags & TF_DEATHFLAG_DEADRINGER)
     {
         return;
     }
@@ -4083,8 +4156,8 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
         return;
     }
 
-    int warIndex = FindActiveWarIndexByPair(attackerClanId, victimClanId);
-    if (warIndex == -1)
+    int warIndex = -1;
+    if (!EnsureActiveWarCacheEntryForPairSync(attackerClanId, victimClanId, warIndex))
     {
         return;
     }
@@ -4109,7 +4182,15 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
     int attackerScore = attackerIsClanA ? war.scoreA : war.scoreB;
     int victimScore = attackerIsClanA ? war.scoreB : war.scoreA;
 
-    BroadcastClanWarScoreUpdate(attackerClanId, victimClanId, attackerScore, victimScore, attacker, victim);
+    BroadcastClanWarScoreUpdate(
+        attackerIsClanA ? war.announceLabelA : war.announceLabelB,
+        attackerIsClanA ? war.announceLabelB : war.announceLabelA,
+        attackerClanId,
+        victimClanId,
+        attackerScore,
+        victimScore,
+        attacker,
+        victim);
 
     if (attackerScore >= CLAN_WAR_POINT_GOAL)
     {
