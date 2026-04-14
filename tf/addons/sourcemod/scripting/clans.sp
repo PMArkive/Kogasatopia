@@ -99,7 +99,8 @@ enum ClanMemberListCols
 {
     ClanMemberListCol_SteamId64 = 0,
     ClanMemberListCol_Rank,
-    ClanMemberListCol_NameColor
+    ClanMemberListCol_JoinedAt,
+    ClanMemberListCol_SubTag
 };
 
 enum ClanWarStatus
@@ -270,6 +271,8 @@ char g_PendingAdminClanDescName[MAXPLAYERS + 1][CLAN_NAME_MAXLEN + 1];
 int g_iClientClanId[MAXPLAYERS + 1];
 bool g_bClientClanLoaded[MAXPLAYERS + 1];
 bool g_bClientClanLoadPending[MAXPLAYERS + 1];
+int g_iClanMembersMenuClanId[MAXPLAYERS + 1];
+char g_sClanMembersMenuClanName[MAXPLAYERS + 1][CLAN_NAME_MAXLEN + 1];
 
 public void OnPluginStart()
 {
@@ -376,6 +379,8 @@ void ResetClientState(int client)
     g_iClientClanId[client] = 0;
     g_bClientClanLoaded[client] = false;
     g_bClientClanLoadPending[client] = false;
+    g_iClanMembersMenuClanId[client] = 0;
+    g_sClanMembersMenuClanName[client][0] = '\0';
 }
 
 void ConnectDatabase()
@@ -974,47 +979,61 @@ static bool IsConnectedClientInClan(int client, int clanId)
         && cachedClanId == clanId;
 }
 
-static void BuildClanMemberDisplayLine(const char[] steamid64, ClanRank rank, const char[] nameColor, char[] buffer, int maxlen)
+static void BuildClanMemberMenuLabel(const char[] viewerSteamId64, const char[] memberSteamId64, ClanRank rank, char[] buffer, int maxlen)
 {
     char name[MAX_NAME_LENGTH * 2];
-    if (!WhaleTracker_GetLastRecordedName(steamid64, name, sizeof(name)) || !name[0])
-    {
-        strcopy(name, sizeof(name), steamid64);
-    }
-
-    int memberClient = FindClientBySteam64(steamid64);
-
-    char rawTag[256];
-    char displayTag[256];
-    if (TryGetSelectedTag(memberClient, steamid64, rawTag, sizeof(rawTag)))
-    {
-        BuildClanDisplayTag(rawTag, displayTag, sizeof(displayTag));
-    }
-    else
-    {
-        displayTag[0] = '\0';
-    }
-
-    char displayName[384];
-    if (nameColor[0])
-    {
-        FormatEx(displayName, sizeof(displayName), "{%s}%s{default}", nameColor, name);
-    }
-    else
-    {
-        strcopy(displayName, sizeof(displayName), name);
-    }
+    ResolvePlayerDisplayName(memberSteamId64, name, sizeof(name));
 
     char rankLabel[16];
     GetClanRankLabel(rank, rankLabel, sizeof(rankLabel));
 
-    if (displayTag[0])
+    if (viewerSteamId64[0] != '\0' && StrEqual(viewerSteamId64, memberSteamId64, false))
     {
-        FormatEx(buffer, maxlen, "%s: %s %s", rankLabel, displayTag, displayName);
+        FormatEx(buffer, maxlen, "%s (You)", name);
         return;
     }
 
-    FormatEx(buffer, maxlen, "%s: %s", rankLabel, displayName);
+    FormatEx(buffer, maxlen, "%s (%s)", name, rankLabel);
+}
+
+static void FormatClanTimestamp(int timestamp, char[] buffer, int maxlen)
+{
+    if (timestamp > 0)
+    {
+        FormatTime(buffer, maxlen, "%Y-%m-%d %H:%M:%S", timestamp);
+        return;
+    }
+
+    strcopy(buffer, maxlen, "Unknown");
+}
+
+void QueryClanMemberDetailsForClient(int userId, int clanId, const char[] clanName, const char[] steamid64)
+{
+    if (!EnsureDatabaseReady())
+    {
+        return;
+    }
+
+    char escapedSteam[SQL_STEAMID64_MAXLEN];
+    EscapeSql(steamid64, escapedSteam, sizeof(escapedSteam));
+
+    char query[512];
+    FormatEx(query, sizeof(query),
+        "SELECT cm.rank, cm.joined_at, COALESCE(cst.tag, '') "
+        ... "FROM clan_members cm "
+        ... "LEFT JOIN clan_sub_tags cst ON cst.clan_id = cm.clan_id AND cst.steamid64 = cm.steamid64 "
+        ... "WHERE cm.clan_id = %d AND cm.steamid64 = '%s' "
+        ... "LIMIT 1",
+        clanId,
+        escapedSteam);
+
+    DataPack pack = new DataPack();
+    pack.WriteCell(userId);
+    pack.WriteCell(clanId);
+    pack.WriteString(clanName);
+    pack.WriteString(steamid64);
+
+    g_Database.Query(SQL_OnClanMemberDetails, query, pack);
 }
 
 static void AnnounceClanInviteToMembers(int clanId, const char[] clanName, const char[] inviterSteam, const char[] targetSteam)
@@ -1682,15 +1701,16 @@ void QueryClanMembersListForClient(int userId, int clanId, const char[] clanName
 {
     char query[512];
     FormatEx(query, sizeof(query),
-        "SELECT cm.steamid64, cm.rank, COALESCE(fnc.color, '') "
+        "SELECT cm.steamid64, cm.rank, cm.joined_at, COALESCE(cst.tag, '') "
         ... "FROM clan_members cm "
-        ... "LEFT JOIN filters_namecolors fnc ON fnc.steamid = cm.steamid64 "
+        ... "LEFT JOIN clan_sub_tags cst ON cst.clan_id = cm.clan_id AND cst.steamid64 = cm.steamid64 "
         ... "WHERE cm.clan_id = %d "
-        ... "ORDER BY cm.rank DESC, cm.joined_at ASC",
+        ... "ORDER BY cm.joined_at ASC, cm.rank DESC, cm.steamid64 ASC",
         clanId);
 
     DataPack pack = new DataPack();
     pack.WriteCell(userId);
+    pack.WriteCell(clanId);
     pack.WriteString(clanName);
 
     g_Database.Query(SQL_OnClanMembersList, query, pack);
@@ -5717,6 +5737,7 @@ public void SQL_OnClanMembersList(Database db, DBResultSet results, const char[]
     pack.Reset();
 
     int userId = pack.ReadCell();
+    int clanId = pack.ReadCell();
     char clanName[CLAN_NAME_MAXLEN + 1];
     pack.ReadString(clanName, sizeof(clanName));
     delete pack;
@@ -5734,80 +5755,171 @@ public void SQL_OnClanMembersList(Database db, DBResultSet results, const char[]
         return;
     }
 
-    CPrintToChat(client, "{default}[Clans] Members of %s:", clanName);
+    g_iClanMembersMenuClanId[client] = clanId;
+    strcopy(g_sClanMembersMenuClanName[client], sizeof(g_sClanMembersMenuClanName[]), clanName);
 
-    ArrayList onlineMembers = new ArrayList(ByteCountToCells(512));
-    ArrayList offlineMembers = new ArrayList(ByteCountToCells(768));
+    char clientSteamId[STEAMID64_MAXLEN];
+    if (!GetClientSteam64(client, clientSteamId, sizeof(clientSteamId)))
+    {
+        PrintToChat(client, "[Clans] Could not read your SteamID64.");
+        return;
+    }
+
+    Menu menu = new Menu(MenuHandler_ClanMembersList);
+
+    char title[192];
+    FormatEx(title, sizeof(title), "Clan Members\n%s", clanName);
+    menu.SetTitle(title);
 
     if (results != null)
     {
         while (results.FetchRow())
         {
             char steamid64[STEAMID64_MAXLEN];
-            char nameColor[64];
             results.FetchString(ClanMemberListCol_SteamId64, steamid64, sizeof(steamid64));
-            results.FetchString(ClanMemberListCol_NameColor, nameColor, sizeof(nameColor));
-
-            char line[512];
-            BuildClanMemberDisplayLine(steamid64, view_as<ClanRank>(results.FetchInt(ClanMemberListCol_Rank)), nameColor, line, sizeof(line));
-
-            if (FindClientBySteam64(steamid64) > 0)
-            {
-                onlineMembers.PushString(line);
-            }
-            else
-            {
-                int lastSeen = WhaleTracker_GetLastSeen(steamid64);
-                char lastSeenText[64];
-                if (lastSeen > 0)
-                {
-                    FormatTime(lastSeenText, sizeof(lastSeenText), "%Y-%m-%d %H:%M:%S", lastSeen);
-                }
-                else
-                {
-                    strcopy(lastSeenText, sizeof(lastSeenText), "Unknown");
-                }
-
-                FormatEx(line, sizeof(line), "%s\n    {default}Last seen: %s", line, lastSeenText);
-                offlineMembers.PushString(line);
-            }
+            char label[192];
+            BuildClanMemberMenuLabel(clientSteamId, steamid64, view_as<ClanRank>(results.FetchInt(ClanMemberListCol_Rank)), label, sizeof(label));
+            menu.AddItem(steamid64, label);
         }
     }
-
-    CPrintToChat(client, "{default}[Clans] Online members:");
-
-    if (onlineMembers.Length <= 0)
+    
+    if (menu.ItemCount <= 0)
     {
-        CPrintToChat(client, "{default}[Clans] None.");
+        menu.AddItem("none", "No members found", ITEMDRAW_DISABLED);
     }
-    else
+
+    menu.ExitBackButton = true;
+    menu.Display(client, CLAN_MENU_TIME);
+}
+
+public int MenuHandler_ClanMembersList(Menu menu, MenuAction action, int param1, int param2)
+{
+    if (action == MenuAction_End)
     {
-        char line[512];
-        for (int i = 0; i < onlineMembers.Length; i++)
+        delete menu;
+    }
+    else if (action == MenuAction_Cancel)
+    {
+        if (param2 == MenuCancel_ExitBack)
         {
-            onlineMembers.GetString(i, line, sizeof(line));
-            CPrintToChat(client, "{default}[Clans] %s", line);
+            Command_ClanMenu(param1, 0);
         }
     }
-
-    CPrintToChat(client, "{default}[Clans] Offline members:");
-
-    if (offlineMembers.Length <= 0)
+    else if (action == MenuAction_Select)
     {
-        CPrintToChat(client, "{default}[Clans] None.");
-    }
-    else
-    {
-        char line[512];
-        for (int i = 0; i < offlineMembers.Length; i++)
+        int client = param1;
+        if (client <= 0 || !IsClientInGame(client))
         {
-            offlineMembers.GetString(i, line, sizeof(line));
-            CPrintToChat(client, "{default}[Clans] %s", line);
+            return 0;
+        }
+
+        char steamid64[STEAMID64_MAXLEN];
+        menu.GetItem(param2, steamid64, sizeof(steamid64));
+
+        if (!steamid64[0] || StrEqual(steamid64, "none", false))
+        {
+            return 0;
+        }
+
+        QueryClanMemberDetailsForClient(
+            GetClientUserId(client),
+            g_iClanMembersMenuClanId[client],
+            g_sClanMembersMenuClanName[client],
+            steamid64);
+    }
+
+    return 0;
+}
+
+public void SQL_OnClanMemberDetails(Database db, DBResultSet results, const char[] error, any data)
+{
+    DataPack pack = view_as<DataPack>(data);
+    pack.Reset();
+
+    int userId = pack.ReadCell();
+    int clanId = pack.ReadCell();
+    char clanName[CLAN_NAME_MAXLEN + 1];
+    char steamid64[STEAMID64_MAXLEN];
+    pack.ReadString(clanName, sizeof(clanName));
+    pack.ReadString(steamid64, sizeof(steamid64));
+    delete pack;
+
+    int client = GetClientOfUserId(userId);
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (error[0])
+    {
+        LogError("[Clans] Clan member details query failed: %s", error);
+        PrintToChat(client, "[Clans] Failed to load clan member details.");
+        return;
+    }
+
+    if (results == null || !results.FetchRow())
+    {
+        PrintToChat(client, "[Clans] Failed to load that clan member.");
+        return;
+    }
+
+    g_iClanMembersMenuClanId[client] = clanId;
+    strcopy(g_sClanMembersMenuClanName[client], sizeof(g_sClanMembersMenuClanName[]), clanName);
+
+    char playerName[MAX_NAME_LENGTH * 2];
+    char rankLabel[16];
+    char joinedAtText[64];
+    char subTag[CLAN_SUB_TAG_STORE_MAXLEN];
+    char title[192];
+    char line[192];
+
+    ResolvePlayerDisplayName(steamid64, playerName, sizeof(playerName));
+    GetClanRankLabel(view_as<ClanRank>(results.FetchInt(0)), rankLabel, sizeof(rankLabel));
+    FormatClanTimestamp(results.FetchInt(1), joinedAtText, sizeof(joinedAtText));
+    results.FetchString(2, subTag, sizeof(subTag));
+    TrimString(subTag);
+
+    Menu menu = new Menu(MenuHandler_ClanMemberDetails);
+    FormatEx(title, sizeof(title), "Clan Member\n%s", clanName);
+    menu.SetTitle(title);
+
+    FormatEx(line, sizeof(line), "Player Name: %s", playerName);
+    menu.AddItem("name", line, ITEMDRAW_DISABLED);
+
+    FormatEx(line, sizeof(line), "Rank: %s", rankLabel);
+    menu.AddItem("rank", line, ITEMDRAW_DISABLED);
+
+    FormatEx(line, sizeof(line), "Join Date: %s", joinedAtText);
+    menu.AddItem("joined", line, ITEMDRAW_DISABLED);
+
+    FormatEx(line, sizeof(line), "Sub-Tag: %s", subTag[0] ? subTag : "None");
+    menu.AddItem("subtag", line, ITEMDRAW_DISABLED);
+
+    FormatEx(line, sizeof(line), "War Kills: %d", 0);
+    menu.AddItem("warkills", line, ITEMDRAW_DISABLED);
+
+    menu.ExitBackButton = true;
+    menu.Display(client, CLAN_MENU_TIME);
+}
+
+public int MenuHandler_ClanMemberDetails(Menu menu, MenuAction action, int param1, int param2)
+{
+    if (action == MenuAction_End)
+    {
+        delete menu;
+    }
+    else if (action == MenuAction_Cancel)
+    {
+        if (param2 == MenuCancel_ExitBack)
+        {
+            QueryClanMembersListForClient(
+                GetClientUserId(param1),
+                g_iClanMembersMenuClanId[param1],
+                g_sClanMembersMenuClanName[param1]);
         }
     }
 
-    delete onlineMembers;
-    delete offlineMembers;
+    return 0;
 }
 
 void StartSetClanSubTagFromInput(int client, const char[] input)
