@@ -192,6 +192,13 @@ stock void ClansPrintToChatWrapped(int client, const char[] fmt, any ...)
     char message[512];
     VFormat(buffer, sizeof(buffer), fmt, 3);
     StripClanChatPrefix(buffer, message, sizeof(message));
+
+    if (StrContains(message, "{teamcolor}", false) != -1)
+    {
+        CPrintToChatEx(client, client, "{gold}[Clans]{default} %s", message);
+        return;
+    }
+
     CPrintToChat(client, "{gold}[Clans]{default} %s", message);
 }
 
@@ -204,6 +211,12 @@ stock void ClansReplyToCommandWrapped(int client, const char[] fmt, any ...)
 
     if (client > 0 && IsClientInGame(client))
     {
+        if (StrContains(message, "{teamcolor}", false) != -1)
+        {
+            CPrintToChatEx(client, client, "{gold}[Clans]{default} %s", message);
+            return;
+        }
+
         CPrintToChat(client, "{gold}[Clans]{default} %s", message);
         return;
     }
@@ -222,6 +235,34 @@ stock void ClansCPrintToChatWrapped(int client, const char[] fmt, any ...)
     char message[512];
     VFormat(buffer, sizeof(buffer), fmt, 3);
     StripClanChatPrefix(buffer, message, sizeof(message));
+
+    if (StrContains(message, "{teamcolor}", false) != -1)
+    {
+        CPrintToChatEx(client, client, "{gold}[Clans]{default} %s", message);
+        return;
+    }
+
+    CPrintToChat(client, "{gold}[Clans]{default} %s", message);
+}
+
+stock void ClansCPrintToChatExWrapped(int client, int author, const char[] fmt, any ...)
+{
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    char buffer[768];
+    char message[768];
+    VFormat(buffer, sizeof(buffer), fmt, 4);
+    StripClanChatPrefix(buffer, message, sizeof(message));
+
+    if (author > 0 && author <= MaxClients && IsClientInGame(author))
+    {
+        CPrintToChatEx(client, author, "{gold}[Clans]{default} %s", message);
+        return;
+    }
+
     CPrintToChat(client, "{gold}[Clans]{default} %s", message);
 }
 
@@ -958,6 +999,38 @@ static void BuildClanChatSenderName(int client, char[] buffer, int maxlen)
     }
 
     GetClientName(client, buffer, maxlen);
+}
+
+static void ResolveClientTeamColorTag(int client, char[] buffer, int maxlen)
+{
+    if (client <= 0 || client > MaxClients || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (StrContains(buffer, "{teamcolor}", false) == -1)
+    {
+        return;
+    }
+
+    char replacement[16];
+    switch (GetClientTeam(client))
+    {
+        case 2:
+        {
+            strcopy(replacement, sizeof(replacement), "{red}");
+        }
+        case 3:
+        {
+            strcopy(replacement, sizeof(replacement), "{blue}");
+        }
+        default:
+        {
+            strcopy(replacement, sizeof(replacement), "{default}");
+        }
+    }
+
+    ReplaceString(buffer, maxlen, "{teamcolor}", replacement, false);
 }
 
 static bool IsConnectedClientInClan(int client, int clanId)
@@ -2931,11 +3004,13 @@ void BuildWarPlayerLabel(int client, char[] buffer, int maxlen)
         if (plainTag[0])
         {
             FormatEx(buffer, maxlen, "[%s] %s", plainTag, displayName);
+            ResolveClientTeamColorTag(client, buffer, maxlen);
             return;
         }
     }
 
     strcopy(buffer, maxlen, displayName);
+    ResolveClientTeamColorTag(client, buffer, maxlen);
 }
 
 bool GetClanInfoSummarySync(int clanId, char[] clanName, int clanNameLen, char[] clanTag, int clanTagLen, char[] ownerName, int ownerNameLen, int &memberCount)
@@ -3319,7 +3394,7 @@ void BroadcastClanWarScoreUpdate(const char[] scoringLabel, const char[] otherLa
             continue;
         }
 
-        CPrintToChat(i, "{gold}[Clans]{default} %s killed %s!", attackerLabel, victimLabel);
+        ClansCPrintToChatExWrapped(i, attacker, "%s killed %s!", attackerLabel, victimLabel);
         CPrintToChat(i, "{gold}[Clans]{default} %s's score: %d | %s's score: %d", scoringLabel, scoringScore, otherLabel, otherScore);
     }
 }
@@ -4110,7 +4185,7 @@ public void SQL_OnClanChatContext(Database db, DBResultSet results, const char[]
             continue;
         }
 
-        CPrintToChat(i, "%s", output);
+        ClansCPrintToChatExWrapped(i, client, "%s", output);
     }
 }
 
