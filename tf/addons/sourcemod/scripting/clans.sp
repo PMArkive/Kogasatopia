@@ -122,12 +122,7 @@ enum struct ActiveClanWar
     int createdAt;
     int expiresAt;
     bool writeDirty;
-    bool writeInFlight;
-    int inFlightScoreA;
-    int inFlightScoreB;
-    int inFlightExpiresAt;
     bool finalizePending;
-    bool finalizeInFlight;
     int finalizeWinnerClanId;
     ClanWarStatus finalizeStatus;
     int finalizeFinishedAt;
@@ -135,6 +130,14 @@ enum struct ActiveClanWar
     char announceLabelB[96];
     char historyLabelA[96];
     char historyLabelB[96];
+}
+
+enum struct PendingClanWarKillDelta
+{
+    int warInstanceId;
+    int clanId;
+    int kills;
+    char steamid64[STEAMID64_MAXLEN];
 }
 
 static void StripClanChatPrefix(const char[] input, char[] output, int maxlen)
@@ -306,6 +309,7 @@ StringMap g_hClanIdCache = null;
 bool g_bClanIdCacheReady = false;
 ArrayList g_hActiveWars = null;
 bool g_bActiveWarCacheReady = false;
+ArrayList g_hPendingClanWarKillDeltas = null;
 
 PromptState g_PromptState[MAXPLAYERS + 1];
 int g_PendingAdminClanDescId[MAXPLAYERS + 1];
@@ -367,7 +371,7 @@ public void OnPluginEnd()
         g_hInviteCleanupTimer = null;
     }
 
-    FlushPendingActiveWarWritesSync();
+    FlushPendingClanWarPersistenceSync();
 
     if (g_hClanWarFlushTimer != null)
     {
@@ -397,6 +401,12 @@ public void OnPluginEnd()
     {
         delete g_hActiveWars;
         g_hActiveWars = null;
+    }
+
+    if (g_hPendingClanWarKillDeltas != null)
+    {
+        delete g_hPendingClanWarKillDeltas;
+        g_hPendingClanWarKillDeltas = null;
     }
 }
 
@@ -503,7 +513,7 @@ void CreateSchemaStep(int step)
             }
         }
 
-        FlushPendingActiveWarWrites();
+        FlushPendingClanWarPersistenceSync();
         return;
     }
 
@@ -1283,42 +1293,108 @@ void UpdateClanWarInstanceFinalState(int instanceId, int scoreA, int scoreB, int
         finishedAt,
         instanceId);
 
-    g_Database.Query(SQL_GenericQueryCallback, query);
+    if (!SQL_FastQuery(g_Database, query))
+    {
+        char error[256];
+        SQL_GetError(g_Database, error, sizeof(error));
+        LogError("[Clans] Failed to finalize war instance %d: %s", instanceId, error);
+        HandleDatabaseConnectionLoss(error);
+    }
 }
 
-void RecordClanWarKill(int warInstanceId, int clanId, const char[] steamid64)
+void QueueClanWarKillDelta(int warInstanceId, int clanId, const char[] steamid64, int kills = 1)
 {
-    if (warInstanceId <= 0 || clanId <= 0 || !steamid64[0] || !EnsureDatabaseReady())
+    if (warInstanceId <= 0 || clanId <= 0 || !steamid64[0] || kills <= 0)
     {
         return;
     }
 
-    char escapedSteam[SQL_STEAMID64_MAXLEN];
-    EscapeSql(steamid64, escapedSteam, sizeof(escapedSteam));
-
-    char query[512];
-    if (IsMySql())
+    if (g_hPendingClanWarKillDeltas == null)
     {
-        FormatEx(query, sizeof(query),
-            "INSERT INTO clan_war_member_kills (war_instance_id, clan_id, steamid64, kills) "
-            ... "VALUES (%d, %d, '%s', 1) "
-            ... "ON DUPLICATE KEY UPDATE kills = kills + 1, clan_id = VALUES(clan_id)",
-            warInstanceId,
-            clanId,
-            escapedSteam);
-    }
-    else
-    {
-        FormatEx(query, sizeof(query),
-            "INSERT INTO clan_war_member_kills (war_instance_id, clan_id, steamid64, kills) "
-            ... "VALUES (%d, %d, '%s', 1) "
-            ... "ON CONFLICT(war_instance_id, steamid64) DO UPDATE SET kills = clan_war_member_kills.kills + 1, clan_id = excluded.clan_id",
-            warInstanceId,
-            clanId,
-            escapedSteam);
+        g_hPendingClanWarKillDeltas = new ArrayList(sizeof(PendingClanWarKillDelta));
     }
 
-    g_Database.Query(SQL_GenericQueryCallback, query);
+    PendingClanWarKillDelta delta;
+    for (int i = 0; i < g_hPendingClanWarKillDeltas.Length; i++)
+    {
+        g_hPendingClanWarKillDeltas.GetArray(i, delta);
+        if (delta.warInstanceId != warInstanceId || delta.clanId != clanId || !StrEqual(delta.steamid64, steamid64, false))
+        {
+            continue;
+        }
+
+        delta.kills += kills;
+        g_hPendingClanWarKillDeltas.SetArray(i, delta);
+        return;
+    }
+
+    delta.warInstanceId = warInstanceId;
+    delta.clanId = clanId;
+    delta.kills = kills;
+    strcopy(delta.steamid64, sizeof(delta.steamid64), steamid64);
+    g_hPendingClanWarKillDeltas.PushArray(delta);
+}
+
+void RecordClanWarKill(int warInstanceId, int clanId, const char[] steamid64)
+{
+    QueueClanWarKillDelta(warInstanceId, clanId, steamid64);
+}
+
+bool FlushPendingClanWarKillWritesSync()
+{
+    if (!EnsureDatabaseReady() || g_hPendingClanWarKillDeltas == null)
+    {
+        return false;
+    }
+
+    PendingClanWarKillDelta delta;
+    for (int i = 0; i < g_hPendingClanWarKillDeltas.Length; i++)
+    {
+        g_hPendingClanWarKillDeltas.GetArray(i, delta);
+
+        char escapedSteam[SQL_STEAMID64_MAXLEN];
+        EscapeSql(delta.steamid64, escapedSteam, sizeof(escapedSteam));
+
+        char query[512];
+        if (IsMySql())
+        {
+            FormatEx(query, sizeof(query),
+                "INSERT INTO clan_war_member_kills (war_instance_id, clan_id, steamid64, kills) "
+                ... "VALUES (%d, %d, '%s', %d) "
+                ... "ON DUPLICATE KEY UPDATE kills = kills + %d, clan_id = VALUES(clan_id)",
+                delta.warInstanceId,
+                delta.clanId,
+                escapedSteam,
+                delta.kills,
+                delta.kills);
+        }
+        else
+        {
+            FormatEx(query, sizeof(query),
+                "INSERT INTO clan_war_member_kills (war_instance_id, clan_id, steamid64, kills) "
+                ... "VALUES (%d, %d, '%s', %d) "
+                ... "ON CONFLICT(war_instance_id, steamid64) DO UPDATE SET kills = clan_war_member_kills.kills + %d, clan_id = excluded.clan_id",
+                delta.warInstanceId,
+                delta.clanId,
+                escapedSteam,
+                delta.kills,
+                delta.kills);
+        }
+
+        if (!SQL_FastQuery(g_Database, query))
+        {
+            char error[256];
+            SQL_GetError(g_Database, error, sizeof(error));
+            LogError("[Clans] Failed to persist war kill delta for instance %d/%s: %s", delta.warInstanceId, delta.steamid64, error);
+            HandleDatabaseConnectionLoss(error);
+            return false;
+        }
+
+        g_hPendingClanWarKillDeltas.Erase(i);
+        i--;
+    }
+
+    return true;
 }
 
 static void AnnounceClanInviteToMembers(int clanId, const char[] clanName, const char[] inviterSteam, const char[] targetSteam)
@@ -1356,6 +1432,128 @@ static int GetAllowedMainClanTagLength(int client)
 static int GetAllowedSubClanTagLength(int client)
 {
     return CheckCommandAccess(client, "clans_long_tag", ADMFLAG_GENERIC, true) ? CLAN_TAG_ADMIN_MAXLEN : CLAN_TAG_PLAYER_MAXLEN;
+}
+
+static bool IsValidSteam64String(const char[] steamid64)
+{
+    int len = strlen(steamid64);
+    if (len < 17 || len > 20)
+    {
+        return false;
+    }
+
+    for (int i = 0; i < len; i++)
+    {
+        int ch = view_as<int>(steamid64[i]) & 0xFF;
+        if (ch < '0' || ch > '9')
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool ValidateClanTagText(const char[] text, bool allowFormatting)
+{
+    if (!text[0])
+    {
+        return false;
+    }
+
+    int len = strlen(text);
+    for (int i = 0; i < len;)
+    {
+        int ch = view_as<int>(text[i]) & 0xFF;
+
+        if (ch < 0x20 || ch == 0x7F)
+        {
+            return false;
+        }
+
+        if (ch == '|')
+        {
+            return false;
+        }
+
+        if (!allowFormatting && (ch == '{' || ch == '}' || ch == '[' || ch == ']'))
+        {
+            return false;
+        }
+
+        if (ch < 0x80)
+        {
+            i++;
+            continue;
+        }
+
+        int needed = 0;
+        int codepoint = 0;
+        int minimum = 0;
+
+        if ((ch & 0xE0) == 0xC0)
+        {
+            needed = 2;
+            codepoint = ch & 0x1F;
+            minimum = 0x80;
+        }
+        else if ((ch & 0xF0) == 0xE0)
+        {
+            needed = 3;
+            codepoint = ch & 0x0F;
+            minimum = 0x800;
+        }
+        else if ((ch & 0xF8) == 0xF0)
+        {
+            needed = 4;
+            codepoint = ch & 0x07;
+            minimum = 0x10000;
+        }
+        else
+        {
+            return false;
+        }
+
+        if ((i + needed) > len)
+        {
+            return false;
+        }
+
+        for (int j = 1; j < needed; j++)
+        {
+            int continuation = view_as<int>(text[i + j]) & 0xFF;
+            if ((continuation & 0xC0) != 0x80)
+            {
+                return false;
+            }
+
+            codepoint = (codepoint << 6) | (continuation & 0x3F);
+        }
+
+        if (codepoint < minimum || codepoint > 0x10FFFF)
+        {
+            return false;
+        }
+
+        if (codepoint >= 0xD800 && codepoint <= 0xDFFF)
+        {
+            return false;
+        }
+
+        i += needed;
+    }
+
+    return true;
+}
+
+static bool IsSafeClanTagText(const char[] text)
+{
+    return ValidateClanTagText(text, false);
+}
+
+static bool IsExportableClanTagText(const char[] text)
+{
+    return ValidateClanTagText(text, true);
 }
 
 static void FormatStoredClanTag(const char[] rawTag, char[] buffer, int maxlen)
@@ -1435,6 +1633,31 @@ static bool AppendJoinedClanTag(char[] buffer, int maxlen, const char[] tag)
     return true;
 }
 
+static bool FetchSingleClanTagValue(const char[] steamid64, const char[] query, const char[] label, char[] buffer, int maxlen)
+{
+    buffer[0] = '\0';
+
+    DBResultSet results = SQL_Query(g_Database, query);
+    if (!HasUsableResultSet(results))
+    {
+        char error[256];
+        SQL_GetError(g_Database, error, sizeof(error));
+        LogError("[Clans] Failed to fetch %s for %s: %s", label, steamid64, error);
+        HandleDatabaseConnectionLoss(error);
+        delete results;
+        return false;
+    }
+
+    if (results.FetchRow())
+    {
+        results.FetchString(0, buffer, maxlen);
+        TrimString(buffer);
+    }
+
+    delete results;
+    return buffer[0] != '\0';
+}
+
 static bool GetClanTagsForSteam64(const char[] steamid64, char[] buffer, int maxlen)
 {
     buffer[0] = '\0';
@@ -1444,63 +1667,56 @@ static bool GetClanTagsForSteam64(const char[] steamid64, char[] buffer, int max
         return false;
     }
 
-    char escapedSteam[SQL_STEAMID64_MAXLEN];
-    EscapeSql(steamid64, escapedSteam, sizeof(escapedSteam));
-
-    char query[1024];
-    FormatEx(query, sizeof(query),
-        "SELECT tag_value, tag_type FROM ("
-        ... "SELECT c.tag AS tag_value, 0 AS tag_type "
-        ... "FROM clan_members cm "
-        ... "INNER JOIN clans c ON c.id = cm.clan_id "
-        ... "WHERE cm.steamid64 = '%s' AND c.tag IS NOT NULL AND c.tag <> '' "
-        ... "UNION "
-        ... "SELECT cst.tag AS tag_value, 1 AS tag_type "
-        ... "FROM clan_members cm "
-        ... "INNER JOIN clan_sub_tags cst ON cst.clan_id = cm.clan_id "
-        ... "WHERE cm.steamid64 = '%s' AND cst.tag IS NOT NULL AND cst.tag <> ''"
-        ... ") tag_list "
-        ... "ORDER BY tag_type ASC, tag_value ASC",
-        escapedSteam,
-        escapedSteam);
-
-    DBResultSet results = SQL_Query(g_Database, query);
-    if (results == null)
+    if (!IsValidSteam64String(steamid64))
     {
-        char error[256];
-        SQL_GetError(g_Database, error, sizeof(error));
-        LogError("[Clans] Failed to fetch clan tags for %s: %s", steamid64, error);
+        LogError("[Clans] Rejected invalid steamid64 while fetching clan tags: %s", steamid64);
         return false;
     }
 
-    bool found = false;
+    char escapedSteam[SQL_STEAMID64_MAXLEN];
+    EscapeSql(steamid64, escapedSteam, sizeof(escapedSteam));
+
+    char query[256];
     char tagValue[CLAN_TAG_STORE_MAXLEN];
     char rawTag[CLAN_SUB_TAG_STORE_MAXLEN];
+    bool found = false;
 
-    while (results.FetchRow())
+    FormatEx(query, sizeof(query),
+        "SELECT c.tag "
+        ... "FROM clan_members cm "
+        ... "INNER JOIN clans c ON c.id = cm.clan_id "
+        ... "WHERE cm.steamid64 = '%s' AND c.tag IS NOT NULL AND c.tag <> '' "
+        ... "LIMIT 1",
+        escapedSteam);
+
+    if (FetchSingleClanTagValue(steamid64, query, "main clan tag", tagValue, sizeof(tagValue)))
     {
-        results.FetchString(0, tagValue, sizeof(tagValue));
-        TrimString(tagValue);
-
-        if (results.FetchInt(1) == 0)
-        {
-            ExtractRawClanTag(tagValue, rawTag, sizeof(rawTag));
-        }
-        else
-        {
-            strcopy(rawTag, sizeof(rawTag), tagValue);
-        }
-
+        ExtractRawClanTag(tagValue, rawTag, sizeof(rawTag));
         TrimString(rawTag);
-        if (!AppendJoinedClanTag(buffer, maxlen, rawTag))
-        {
-            continue;
-        }
 
-        found = true;
+        if (IsExportableClanTagText(rawTag) && AppendJoinedClanTag(buffer, maxlen, rawTag))
+        {
+            found = true;
+        }
     }
 
-    delete results;
+    FormatEx(query, sizeof(query),
+        "SELECT cst.tag "
+        ... "FROM clan_sub_tags cst "
+        ... "INNER JOIN clan_members cm ON cm.clan_id = cst.clan_id AND cm.steamid64 = cst.steamid64 "
+        ... "WHERE cst.steamid64 = '%s' AND cst.tag IS NOT NULL AND cst.tag <> '' "
+        ... "LIMIT 1",
+        escapedSteam);
+
+    if (FetchSingleClanTagValue(steamid64, query, "clan sub-tag", rawTag, sizeof(rawTag)))
+    {
+        TrimString(rawTag);
+        if (IsExportableClanTagText(rawTag) && AppendJoinedClanTag(buffer, maxlen, rawTag))
+        {
+            found = true;
+        }
+    }
+
     return found;
 }
 
@@ -1591,6 +1807,12 @@ bool ResolveClanIdForSteam64Sync(const char[] steamid64, int &clanId)
         return false;
     }
 
+    if (!IsValidSteam64String(steamid64))
+    {
+        LogError("[Clans] Rejected invalid steamid64 while resolving clan id: %s", steamid64);
+        return false;
+    }
+
     if (GetCachedClanIdForSteam64(steamid64, clanId))
     {
         return true;
@@ -1605,11 +1827,13 @@ bool ResolveClanIdForSteam64Sync(const char[] steamid64, int &clanId)
         escapedSteam);
 
     DBResultSet results = SQL_Query(g_Database, query);
-    if (results == null)
+    if (!HasUsableResultSet(results))
     {
         char error[256];
         SQL_GetError(g_Database, error, sizeof(error));
         LogError("[Clans] Failed to resolve clan id for %s: %s", steamid64, error);
+        HandleDatabaseConnectionLoss(error);
+        delete results;
         return false;
     }
 
@@ -1906,7 +2130,7 @@ public Action Timer_CleanupExpiredInvites(Handle timer, any data)
 
 public Action Timer_FlushClanWarDeltas(Handle timer, any data)
 {
-    FlushPendingActiveWarWrites();
+    FlushPendingClanWarPersistenceSync();
     return Plugin_Continue;
 }
 
@@ -2646,12 +2870,7 @@ void UpsertActiveWarCacheEntry(int warId, int clanIdA, int clanIdB, int scoreA, 
     war.createdAt = createdAt;
     war.expiresAt = expiresAt;
     war.writeDirty = false;
-    war.writeInFlight = false;
-    war.inFlightScoreA = 0;
-    war.inFlightScoreB = 0;
-    war.inFlightExpiresAt = 0;
     war.finalizePending = false;
-    war.finalizeInFlight = false;
     war.finalizeWinnerClanId = 0;
     war.finalizeStatus = ClanWarStatus_Active;
     war.finalizeFinishedAt = 0;
@@ -2687,7 +2906,7 @@ bool DispatchActiveWarScoreWrite(int index)
     ActiveClanWar war;
     g_hActiveWars.GetArray(index, war);
 
-    if (war.finalizePending || war.finalizeInFlight || war.writeInFlight || !war.writeDirty)
+    if (war.finalizePending || !war.writeDirty)
     {
         return true;
     }
@@ -2703,21 +2922,17 @@ bool DispatchActiveWarScoreWrite(int index)
         war.createdAt,
         view_as<int>(ClanWarStatus_Active));
 
-    DataPack pack = new DataPack();
-    pack.WriteCell(war.warId);
-    pack.WriteCell(war.createdAt);
-    pack.WriteCell(war.scoreA);
-    pack.WriteCell(war.scoreB);
-    pack.WriteCell(war.expiresAt);
+    if (!SQL_FastQuery(g_Database, query))
+    {
+        char error[256];
+        SQL_GetError(g_Database, error, sizeof(error));
+        LogError("[Clans] Failed to persist war %d score snapshot: %s", war.warId, error);
+        HandleDatabaseConnectionLoss(error);
+        return false;
+    }
 
     war.writeDirty = false;
-    war.writeInFlight = true;
-    war.inFlightScoreA = war.scoreA;
-    war.inFlightScoreB = war.scoreB;
-    war.inFlightExpiresAt = war.expiresAt;
     g_hActiveWars.SetArray(index, war);
-
-    g_Database.Query(SQL_OnActiveWarScoreWrite, query, pack);
     return true;
 }
 
@@ -2728,67 +2943,18 @@ void FlushPendingActiveWarWrites()
         return;
     }
 
-    for (int i = 0; i < g_hActiveWars.Length; i++)
+    for (int i = g_hActiveWars.Length - 1; i >= 0; i--)
     {
         ActiveClanWar war;
         g_hActiveWars.GetArray(i, war);
 
         if (war.finalizePending)
         {
-            if (!war.finalizeInFlight)
-            {
-                DispatchFinalizeActiveWarWrite(i);
-            }
+            DispatchFinalizeActiveWarWrite(i);
             continue;
         }
 
         DispatchActiveWarScoreWrite(i);
-    }
-}
-
-public void SQL_OnActiveWarScoreWrite(Database db, DBResultSet results, const char[] error, any data)
-{
-    DataPack pack = view_as<DataPack>(data);
-    pack.Reset();
-
-    int warId = pack.ReadCell();
-    int createdAt = pack.ReadCell();
-    int scoreA = pack.ReadCell();
-    int scoreB = pack.ReadCell();
-    int expiresAt = pack.ReadCell();
-    delete pack;
-
-    int index = FindActiveWarIndexByWarId(warId);
-    if (index == -1)
-    {
-        return;
-    }
-
-    ActiveClanWar war;
-    g_hActiveWars.GetArray(index, war);
-
-    if (war.createdAt != createdAt || !war.writeInFlight)
-    {
-        return;
-    }
-
-    if (error[0])
-    {
-        LogError("[Clans] Failed to persist war %d score snapshot: %s", warId, error);
-        war.writeInFlight = false;
-        war.writeDirty = true;
-        g_hActiveWars.SetArray(index, war);
-        HandleDatabaseConnectionLoss(error);
-        return;
-    }
-
-    if (war.inFlightScoreA == scoreA && war.inFlightScoreB == scoreB && war.inFlightExpiresAt == expiresAt)
-    {
-        war.writeInFlight = false;
-        war.inFlightScoreA = 0;
-        war.inFlightScoreB = 0;
-        war.inFlightExpiresAt = 0;
-        g_hActiveWars.SetArray(index, war);
     }
 }
 
@@ -2802,7 +2968,7 @@ bool DispatchFinalizeActiveWarWrite(int index)
     ActiveClanWar war;
     g_hActiveWars.GetArray(index, war);
 
-    if (!war.finalizePending || war.finalizeInFlight)
+    if (!war.finalizePending)
     {
         return true;
     }
@@ -2829,121 +2995,23 @@ bool DispatchFinalizeActiveWarWrite(int index)
         war.warId,
         war.createdAt);
 
-    DataPack pack = new DataPack();
-    pack.WriteCell(war.warId);
-    pack.WriteCell(war.createdAt);
-    pack.WriteCell(war.finalizeFinishedAt);
-    pack.WriteCell(view_as<int>(war.finalizeStatus));
-    pack.WriteCell(war.finalizeWinnerClanId);
+    if (!SQL_FastQuery(g_Database, query))
+    {
+        char error[256];
+        SQL_GetError(g_Database, error, sizeof(error));
+        LogError("[Clans] Failed to finalize war %d: %s", war.warId, error);
+        HandleDatabaseConnectionLoss(error);
+        return false;
+    }
 
-    war.finalizeInFlight = true;
-    g_hActiveWars.SetArray(index, war);
-
-    g_Database.Query(SQL_OnFinalizeActiveWarWrite, query, pack);
+    RemoveActiveWarCacheIndex(index);
     return true;
 }
 
-public void SQL_OnFinalizeActiveWarWrite(Database db, DBResultSet results, const char[] error, any data)
+void FlushPendingClanWarPersistenceSync()
 {
-    DataPack pack = view_as<DataPack>(data);
-    pack.Reset();
-
-    int warId = pack.ReadCell();
-    int createdAt = pack.ReadCell();
-    int finishedAt = pack.ReadCell();
-    ClanWarStatus status = view_as<ClanWarStatus>(pack.ReadCell());
-    int winnerClanId = pack.ReadCell();
-    delete pack;
-
-    int index = FindActiveWarIndexByWarId(warId);
-    if (index == -1)
-    {
-        return;
-    }
-
-    ActiveClanWar war;
-    g_hActiveWars.GetArray(index, war);
-
-    if (war.createdAt != createdAt || !war.finalizePending)
-    {
-        return;
-    }
-
-    if (error[0])
-    {
-        LogError("[Clans] Failed to finalize war %d: %s", warId, error);
-        war.finalizeInFlight = false;
-        g_hActiveWars.SetArray(index, war);
-        HandleDatabaseConnectionLoss(error);
-        return;
-    }
-
-    if (war.finalizeInFlight
-        && war.finalizeFinishedAt == finishedAt
-        && war.finalizeStatus == status
-        && war.finalizeWinnerClanId == winnerClanId)
-    {
-        RemoveActiveWarCacheIndex(index);
-    }
-}
-
-void FlushPendingActiveWarWritesSync()
-{
-    if (!EnsureDatabaseReady() || g_hActiveWars == null)
-    {
-        return;
-    }
-
-    for (int i = g_hActiveWars.Length - 1; i >= 0; i--)
-    {
-        ActiveClanWar war;
-        g_hActiveWars.GetArray(i, war);
-
-        char query[256];
-        if (war.finalizePending)
-        {
-            char winnerValue[16];
-            if (war.finalizeWinnerClanId > 0)
-            {
-                IntToString(war.finalizeWinnerClanId, winnerValue, sizeof(winnerValue));
-            }
-            else
-            {
-                strcopy(winnerValue, sizeof(winnerValue), "NULL");
-            }
-
-            FormatEx(query, sizeof(query),
-                "UPDATE clan_wars SET score_a = %d, score_b = %d, winner_clan_id = %s, status = %d, finished_at = %d "
-                ... "WHERE id = %d AND created_at = %d",
-                war.scoreA,
-                war.scoreB,
-                winnerValue,
-                view_as<int>(war.finalizeStatus),
-                war.finalizeFinishedAt,
-                war.warId,
-                war.createdAt);
-        }
-        else
-        {
-            FormatEx(query, sizeof(query),
-                "UPDATE clan_wars SET score_a = %d, score_b = %d, expires_at = %d "
-                ... "WHERE id = %d AND created_at = %d AND status = %d",
-                war.scoreA,
-                war.scoreB,
-                war.expiresAt,
-                war.warId,
-                war.createdAt,
-                view_as<int>(ClanWarStatus_Active));
-        }
-
-        if (!SQL_FastQuery(g_Database, query))
-        {
-            char error[256];
-            SQL_GetError(g_Database, error, sizeof(error));
-            LogError("[Clans] Failed to persist war %d during plugin shutdown: %s", war.warId, error);
-            HandleDatabaseConnectionLoss(error);
-        }
-    }
+    FlushPendingActiveWarWrites();
+    FlushPendingClanWarKillWritesSync();
 }
 
 int FindClanWarIdByPairSync(int clanIdA, int clanIdB)
@@ -3904,12 +3972,7 @@ bool FinalizeClanWarSync(int warId, int clanIdA, int clanIdB, int scoreA, int sc
     }
 
     war.writeDirty = false;
-    war.writeInFlight = false;
-    war.inFlightScoreA = 0;
-    war.inFlightScoreB = 0;
-    war.inFlightExpiresAt = 0;
     war.finalizePending = true;
-    war.finalizeInFlight = false;
     war.finalizeWinnerClanId = winnerClanId;
     war.finalizeStatus = status;
     war.finalizeFinishedAt = GetTime();
@@ -3953,7 +4016,7 @@ bool FinalizeClanWarSync(int warId, int clanIdA, int clanIdB, int scoreA, int sc
 
     if (g_bDatabaseReady)
     {
-        DispatchFinalizeActiveWarWrite(warIndex);
+        FlushPendingClanWarPersistenceSync();
     }
 
     return true;
@@ -6181,7 +6244,6 @@ public void SQL_OnClanInfoById(Database db, DBResultSet results, const char[] er
         return;
     }
 
-    int clanId = results.FetchInt(0);
     char clanName[CLAN_NAME_MAXLEN + 1];
     char clanTag[CLAN_TAG_STORE_MAXLEN];
     char ownerSteam[STEAMID64_MAXLEN];
@@ -6200,8 +6262,6 @@ public void SQL_OnClanInfoById(Database db, DBResultSet results, const char[] er
     CPrintToChat(client, "{default}[Clans] Desc: %s", description[0] ? description : "(none)");
     CPrintToChat(client, "{default}[Clans] Member count: %d", results.FetchInt(5));
     CPrintToChat(client, "{default}[Clans] Cached points: %d", results.FetchInt(6));
-
-    QueryClanMembersListForClient(data, clanId, clanName);
 }
 
 public Action Command_ClanPoints(int client, int args)
@@ -8195,6 +8255,12 @@ public void SQL_OnClanTagContext(Database db, DBResultSet results, const char[] 
         return;
     }
 
+    if (!IsSafeClanTagText(rawTag))
+    {
+        PrintToChat(client, "[Clans] Tags may not contain control characters or formatting delimiters.");
+        return;
+    }
+
     char formattedTag[CLAN_TAG_STORE_MAXLEN];
     FormatStoredClanTag(rawTag, formattedTag, sizeof(formattedTag));
 
@@ -8325,6 +8391,12 @@ public void SQL_OnClanSubTagContext(Database db, DBResultSet results, const char
     if (strlen(rawTag) > allowed)
     {
         PrintToChat(client, "[Clans] Sub-tag is too long. Max length: %d.", allowed);
+        return;
+    }
+
+    if (!IsSafeClanTagText(rawTag))
+    {
+        PrintToChat(client, "[Clans] Tags may not contain control characters or formatting delimiters.");
         return;
     }
 
