@@ -6,6 +6,7 @@
 
 #define PLUGIN_VERSION "0.1.0"
 #define GIT_REPO_LINE_MAX 1024
+#define GIT_REPO_RETRY_SECONDS 10.0
 
 public Plugin myinfo =
 {
@@ -32,6 +33,7 @@ ConVar g_hRepoCommitUnix = null;
 ConVar g_hRepoCommitTimezone = null;
 
 Handle g_hRefreshTimer = null;
+Handle g_hRetryTimer = null;
 char g_sLastError[256];
 
 public void OnPluginStart()
@@ -141,6 +143,12 @@ public void OnMapStart()
     RefreshGitMetadata(false);
 }
 
+public void OnMapEnd()
+{
+    g_hRefreshTimer = null;
+    g_hRetryTimer = null;
+}
+
 public void ConVarChanged_Refresh(ConVar convar, const char[] oldValue, const char[] newValue)
 {
     RefreshTimer();
@@ -202,15 +210,51 @@ public Action Command_ShowGitDisplay(int client, int args)
 
 public Action Timer_RefreshGitMetadata(Handle timer, any data)
 {
+    if (timer != g_hRefreshTimer)
+    {
+        return Plugin_Stop;
+    }
+
     RefreshGitMetadata(false);
     return Plugin_Continue;
+}
+
+public Action Timer_RetryGitMetadata(Handle timer, any data)
+{
+    if (timer != g_hRetryTimer)
+    {
+        return Plugin_Stop;
+    }
+
+    g_hRetryTimer = null;
+    RefreshGitMetadata(false);
+    return Plugin_Stop;
+}
+
+void ScheduleRetry()
+{
+    if (g_hRetryTimer != null)
+    {
+        return;
+    }
+
+    g_hRetryTimer = CreateTimer(GIT_REPO_RETRY_SECONDS, Timer_RetryGitMetadata, _, TIMER_FLAG_NO_MAPCHANGE);
+}
+
+void CancelRetry()
+{
+    if (g_hRetryTimer != null)
+    {
+        delete g_hRetryTimer;
+        g_hRetryTimer = null;
+    }
 }
 
 void RefreshTimer()
 {
     if (g_hRefreshTimer != null)
     {
-        CloseHandle(g_hRefreshTimer);
+        delete g_hRefreshTimer;
         g_hRefreshTimer = null;
     }
 
@@ -229,6 +273,7 @@ bool RefreshGitMetadata(bool logFailures)
 
     if (sourcePath[0] == '\0')
     {
+        CancelRetry();
         ClearDisplayMetadata("disabled", "", false);
         return false;
     }
@@ -238,6 +283,7 @@ bool RefreshGitMetadata(bool logFailures)
     char error[256];
     if (!ResolveGitDirectory(sourcePath, gitDir, sizeof(gitDir), workTree, sizeof(workTree), error, sizeof(error)))
     {
+        ScheduleRetry();
         ClearDisplayMetadata("error", error, logFailures);
         return false;
     }
@@ -300,6 +346,7 @@ bool RefreshGitMetadata(bool logFailures)
 
     if (haveHead && haveDate)
     {
+        CancelRetry();
         SetStatus("ok", "", false);
         return true;
     }
@@ -309,6 +356,7 @@ bool RefreshGitMetadata(bool logFailures)
         strcopy(error, sizeof(error), "Repository metadata refresh only completed partially.");
     }
 
+    ScheduleRetry();
     SetStatus("partial", error, logFailures);
     return haveHead || haveDate;
 }
