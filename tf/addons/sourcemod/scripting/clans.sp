@@ -1658,6 +1658,47 @@ static bool FetchSingleClanTagValue(const char[] steamid64, const char[] query, 
     return buffer[0] != '\0';
 }
 
+static bool AppendClanSubTagsForSteam64(const char[] steamid64, char[] buffer, int maxlen)
+{
+    char escapedSteam[SQL_STEAMID64_MAXLEN];
+    EscapeSql(steamid64, escapedSteam, sizeof(escapedSteam));
+
+    char query[384];
+    FormatEx(query, sizeof(query),
+        "SELECT cst.tag "
+        ... "FROM clan_members self_cm "
+        ... "INNER JOIN clan_sub_tags cst ON cst.clan_id = self_cm.clan_id "
+        ... "WHERE self_cm.steamid64 = '%s' AND cst.tag IS NOT NULL AND cst.tag <> '' "
+        ... "ORDER BY cst.created_at ASC, cst.steamid64 ASC",
+        escapedSteam);
+
+    DBResultSet results = SQL_Query(g_Database, query);
+    if (!HasUsableResultSet(results))
+    {
+        char error[256];
+        SQL_GetError(g_Database, error, sizeof(error));
+        LogError("[Clans] Failed to fetch clan sub-tags for %s: %s", steamid64, error);
+        HandleDatabaseConnectionLoss(error);
+        delete results;
+        return false;
+    }
+
+    char rawTag[CLAN_SUB_TAG_STORE_MAXLEN];
+    bool found = false;
+    while (results.FetchRow())
+    {
+        results.FetchString(0, rawTag, sizeof(rawTag));
+        TrimString(rawTag);
+        if (IsExportableClanTagText(rawTag) && AppendJoinedClanTag(buffer, maxlen, rawTag))
+        {
+            found = true;
+        }
+    }
+
+    delete results;
+    return found;
+}
+
 static bool GetClanTagsForSteam64(const char[] steamid64, char[] buffer, int maxlen)
 {
     buffer[0] = '\0';
@@ -1700,21 +1741,9 @@ static bool GetClanTagsForSteam64(const char[] steamid64, char[] buffer, int max
         }
     }
 
-    FormatEx(query, sizeof(query),
-        "SELECT cst.tag "
-        ... "FROM clan_sub_tags cst "
-        ... "INNER JOIN clan_members cm ON cm.clan_id = cst.clan_id AND cm.steamid64 = cst.steamid64 "
-        ... "WHERE cst.steamid64 = '%s' AND cst.tag IS NOT NULL AND cst.tag <> '' "
-        ... "LIMIT 1",
-        escapedSteam);
-
-    if (FetchSingleClanTagValue(steamid64, query, "clan sub-tag", rawTag, sizeof(rawTag)))
+    if (AppendClanSubTagsForSteam64(steamid64, buffer, maxlen))
     {
-        TrimString(rawTag);
-        if (IsExportableClanTagText(rawTag) && AppendJoinedClanTag(buffer, maxlen, rawTag))
-        {
-            found = true;
-        }
+        found = true;
     }
 
     return found;
@@ -3641,17 +3670,14 @@ void BuildWarPlayerLabel(int client, char[] buffer, int maxlen)
 
     char steamid64[STEAMID64_MAXLEN];
     char selectedTag[256];
-    char plainTag[256];
+    char displayTag[256];
     if (GetClientSteam64(client, steamid64, sizeof(steamid64))
         && TryGetSelectedTag(client, steamid64, selectedTag, sizeof(selectedTag)))
     {
-        strcopy(plainTag, sizeof(plainTag), selectedTag);
-        CRemoveTags(plainTag, sizeof(plainTag));
-        TrimString(plainTag);
-
-        if (plainTag[0])
+        BuildClanDisplayTag(selectedTag, displayTag, sizeof(displayTag));
+        if (displayTag[0])
         {
-            FormatEx(buffer, maxlen, "[%s] %s", plainTag, displayName);
+            FormatEx(buffer, maxlen, "%s %s", displayTag, displayName);
             ResolveClientTeamColorTag(client, buffer, maxlen);
             return;
         }
