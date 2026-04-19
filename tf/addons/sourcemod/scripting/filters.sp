@@ -1738,15 +1738,23 @@ static bool Filters_GetClientColorToken(int client, char[] colorTag, int maxlen)
         return false;
     }
 
-    if (g_NameColors[client][0] != '\0')
+    char formattedTag[40];
+    BuildNameColorTag(client, formattedTag, sizeof(formattedTag));
+    TrimString(formattedTag);
+    if (!formattedTag[0])
     {
-        strcopy(colorTag, maxlen, g_NameColors[client]);
-    }
-    else
-    {
-        strcopy(colorTag, maxlen, "teamcolor");
+        return false;
     }
 
+    int length = strlen(formattedTag);
+    if (length >= 3 && formattedTag[0] == '{' && formattedTag[length - 1] == '}')
+    {
+        formattedTag[length - 1] = '\0';
+        strcopy(colorTag, maxlen, formattedTag[1]);
+        return (colorTag[0] != '\0');
+    }
+
+    strcopy(colorTag, maxlen, formattedTag);
     return (colorTag[0] != '\0');
 }
 
