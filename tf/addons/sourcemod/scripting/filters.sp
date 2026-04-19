@@ -56,6 +56,7 @@ public APLRes AskPluginLoad2(Handle self, bool late, char[] error, int err_max)
     RegPluginLibrary("filters");
     CreateNative("Filters_IsRedlisted", Native_Filters_IsRedlisted);
     CreateNative("Filters_GetChatName", Native_Filters_GetChatName);
+    CreateNative("Filters_GetSteamIdColorTag", Native_Filters_GetSteamIdColorTag);
     MarkNativeAsOptional("Hugs_GetRapesGiven");
     MarkNativeAsOptional("Hugs_AreStatsLoaded");
     MarkNativeAsOptional("WhaleTracker_GetCumulativeKills");
@@ -1696,6 +1697,59 @@ void BuildNameColorTag(int client, char[] colorTag, int length)
     }
 }
 
+static bool Filters_FindClientBySteamId64(const char[] steamId, int &client)
+{
+    client = 0;
+
+    if (!steamId[0])
+    {
+        return false;
+    }
+
+    char clientSteamId[32];
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (!IsClientInGame(i))
+        {
+            continue;
+        }
+
+        if (!GetClientAuthId(i, AuthId_SteamID64, clientSteamId, sizeof(clientSteamId), true))
+        {
+            continue;
+        }
+
+        if (StrEqual(clientSteamId, steamId, false))
+        {
+            client = i;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool Filters_GetClientColorToken(int client, char[] colorTag, int maxlen)
+{
+    colorTag[0] = '\0';
+
+    if (client <= 0 || client > MaxClients || !IsClientInGame(client))
+    {
+        return false;
+    }
+
+    if (g_NameColors[client][0] != '\0')
+    {
+        strcopy(colorTag, maxlen, g_NameColors[client]);
+    }
+    else
+    {
+        strcopy(colorTag, maxlen, "teamcolor");
+    }
+
+    return (colorTag[0] != '\0');
+}
+
 void BuildMessageColorTag(int client, char[] colorTag, int length)
 {
     if (g_hFiltersChristmas != null && g_hFiltersChristmas.BoolValue)
@@ -3209,6 +3263,25 @@ public any Native_Filters_GetChatName(Handle plugin, int numParams)
 
     SetNativeString(2, buffer, maxlen, true);
     return 1;
+}
+
+public any Native_Filters_GetSteamIdColorTag(Handle plugin, int numParams)
+{
+    char steamId[32];
+    GetNativeString(1, steamId, sizeof(steamId));
+
+    int maxlen = GetNativeCell(3);
+    char buffer[32];
+    buffer[0] = '\0';
+
+    int client = 0;
+    if (maxlen > 0 && Filters_FindClientBySteamId64(steamId, client))
+    {
+        Filters_GetClientColorToken(client, buffer, sizeof(buffer));
+    }
+
+    SetNativeString(2, buffer, maxlen, true);
+    return (buffer[0] != '\0');
 }
 
 // ==================== WHITELIST COMMANDS ====================
