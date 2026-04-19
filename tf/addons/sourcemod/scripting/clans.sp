@@ -16,7 +16,7 @@
 #define CLAN_WAR_EXPIRE_SECONDS   604800
 #define CLAN_WAR_FLUSH_INTERVAL   3.0
 #define CLAN_DB_RECONNECT_INTERVAL 5.0
-#define CLAN_WAR_POINT_GOAL       100
+#define CLAN_WAR_POINT_GOAL       50
 #define CLAN_NAME_MAXLEN          48
 #define CLAN_DESC_MAXLEN          128
 #define CLAN_TAG_MAXLEN           64
