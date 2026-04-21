@@ -30,11 +30,26 @@ static const char SCRAMBLE_KEYWORDS[][] =
     "shitteam"
 };
 
-bool g_bPlayerVoted[MAXPLAYERS + 1];
-int g_iVoteRequests = 0;
+static const char SURRENDER_KEYWORDS[][] =
+{
+    "surrender"
+};
+
+enum WhaleVoteKind
+{
+    WhaleVote_None = 0,
+    WhaleVote_Scramble,
+    WhaleVote_Surrender
+};
+
+bool g_bPlayerRequestedScramble[MAXPLAYERS + 1];
+bool g_bPlayerRequestedSurrender[MAXPLAYERS + 1];
+int g_iScrambleVoteRequests = 0;
+int g_iSurrenderVoteRequests = 0;
 bool g_bVoteRunning = false;
 bool g_bNativeVotes = false;
 bool g_bVoteAllowLowPop = false;
+WhaleVoteKind g_eActiveVoteKind = WhaleVote_None;
 bool scrambleCooldown = false;
 NativeVote g_hVote = null;
 Handle g_hScrambleCooldownTimer = null;
@@ -91,6 +106,7 @@ public void OnPluginStart()
     }
     RegConsoleCmd("sm_votescramble", Command_Scramble);
     RegConsoleCmd("sm_whalescramble", Command_Scramble);
+    RegConsoleCmd("sm_surrender", Command_SurrenderRound);
     RegAdminCmd("sm_forcescramble", Command_WhaleScramble, ADMFLAG_GENERIC, "Immediately perform a whale scramble.");
     RegAdminCmd("sm_forcewhalescramble", Command_WhaleScramble, ADMFLAG_GENERIC, "Immediately perform a whale scramble.");
     RegAdminCmd("sm_whalescramblevote", Command_ForceScrambleVote, ADMFLAG_GENERIC, "Force a whale scramble vote.");
@@ -153,12 +169,20 @@ public void OnClientDisconnect(int client)
 {
     if (client <= 0 || client > MaxClients)
         return;
-    if (g_bPlayerVoted[client])
+    if (g_bPlayerRequestedScramble[client])
     {
-        g_bPlayerVoted[client] = false;
-        if (g_iVoteRequests > 0)
+        g_bPlayerRequestedScramble[client] = false;
+        if (g_iScrambleVoteRequests > 0)
         {
-            g_iVoteRequests--;
+            g_iScrambleVoteRequests--;
+        }
+    }
+    if (g_bPlayerRequestedSurrender[client])
+    {
+        g_bPlayerRequestedSurrender[client] = false;
+        if (g_iSurrenderVoteRequests > 0)
+        {
+            g_iSurrenderVoteRequests--;
         }
     }
 }
@@ -172,7 +196,14 @@ public void OnClientPutInServer(int client)
 public Action Command_Scramble(int client, int args)
 {
     LogWhale("Scramble request via command from %N (%d).", client, GetClientUserId(client));
-    HandleScrambleRequest(client);
+    HandleVoteRequest(client, WhaleVote_Scramble);
+    return Plugin_Handled;
+}
+
+public Action Command_SurrenderRound(int client, int args)
+{
+    LogWhale("Surrender request via command from %N (%d).", client, GetClientUserId(client));
+    HandleVoteRequest(client, WhaleVote_Surrender);
     return Plugin_Handled;
 }
 
@@ -186,7 +217,7 @@ public Action Command_WhaleScramble(int client, int args)
 public Action Command_ForceScrambleVote(int client, int args)
 {
     LogWhale("Admin force vote requested by %N (%d).", client, GetClientUserId(client));
-    StartScrambleVote(client, false, true);
+    StartVote(client, false, true, WhaleVote_Scramble);
     return Plugin_Handled;
 }
 
@@ -213,7 +244,17 @@ public Action SayListener(int client, const char[] command, int argc)
         if (StrEqual(text, SCRAMBLE_KEYWORDS[i], false))
         {
             LogWhale("Scramble request via chat from %N (%d): %s", client, GetClientUserId(client), text);
-            HandleScrambleRequest(client);
+            HandleVoteRequest(client, WhaleVote_Scramble);
+            return Plugin_Handled;
+        }
+    }
+
+    for (int i = 0; i < sizeof(SURRENDER_KEYWORDS); i++)
+    {
+        if (StrEqual(text, SURRENDER_KEYWORDS[i], false))
+        {
+            LogWhale("Surrender request via chat from %N (%d): %s", client, GetClientUserId(client), text);
+            HandleVoteRequest(client, WhaleVote_Surrender);
             return Plugin_Handled;
         }
     }
@@ -258,55 +299,119 @@ static void UpdateNativeVotes()
     g_bNativeVotes = LibraryExists("nativevotes") && NativeVotes_IsVoteTypeSupported(NativeVotesType_Custom_YesNo);
 }
 
-static void HandleScrambleRequest(int client)
+static void GetVoteActionName(WhaleVoteKind kind, char[] buffer, int maxlen)
+{
+    buffer[0] = '\0';
+
+    switch (kind)
+    {
+        case WhaleVote_Surrender:
+        {
+            strcopy(buffer, maxlen, "surrender");
+            return;
+        }
+    }
+
+    strcopy(buffer, maxlen, "scramble");
+}
+
+static int GetVoteRequestCount(WhaleVoteKind kind)
+{
+    if (kind == WhaleVote_Surrender)
+    {
+        return g_iSurrenderVoteRequests;
+    }
+
+    return g_iScrambleVoteRequests;
+}
+
+static void SetPlayerVoteRequested(int client, WhaleVoteKind kind, bool value)
+{
+    if (kind == WhaleVote_Surrender)
+    {
+        g_bPlayerRequestedSurrender[client] = value;
+        return;
+    }
+
+    g_bPlayerRequestedScramble[client] = value;
+}
+
+static bool HasPlayerRequestedVote(int client, WhaleVoteKind kind)
+{
+    if (kind == WhaleVote_Surrender)
+    {
+        return g_bPlayerRequestedSurrender[client];
+    }
+
+    return g_bPlayerRequestedScramble[client];
+}
+
+static void IncrementVoteRequestCount(WhaleVoteKind kind)
+{
+    if (kind == WhaleVote_Surrender)
+    {
+        g_iSurrenderVoteRequests++;
+        return;
+    }
+
+    g_iScrambleVoteRequests++;
+}
+
+static void HandleVoteRequest(int client, WhaleVoteKind kind)
 {
     if (client <= 0 || !IsClientInGame(client) || IsFakeClient(client))
         return;
 
+    char actionName[16];
+    GetVoteActionName(kind, actionName, sizeof(actionName));
+
     if (scrambleCooldown)
     {
-        CPrintToChat(client, "{blue}[WhaleScramble]{default} Scramble is on cooldown.");
-        LogWhale("Vote request rejected: scramble cooldown active (client %N).", client);
+        CPrintToChat(client, "{blue}[WhaleScramble]{default} %s is on cooldown.", actionName);
+        LogWhale("Vote request rejected: %s cooldown active (client %N).", actionName, client);
         return;
     }
 
     if (g_bVoteRunning || NativeVotes_IsVoteInProgress() || IsVoteInProgress())
     {
         CPrintToChat(client, "{blue}[WhaleScramble]{default} A vote is already running.");
-        LogWhale("Vote request rejected: vote already running (client %N).", client);
+        LogWhale("Vote request rejected: vote already running (client %N kind=%s).", client, actionName);
         return;
     }
 
-    if (g_bPlayerVoted[client])
+    if (HasPlayerRequestedVote(client, kind))
     {
-        CPrintToChat(client, "{blue}[WhaleScramble]{default} You already requested a scramble.");
-        LogWhale("Vote request rejected: already requested (client %N).", client);
+        CPrintToChat(client, "{blue}[WhaleScramble]{default} You already requested a %s vote.", actionName);
+        LogWhale("Vote request rejected: already requested (client %N kind=%s).", client, actionName);
         return;
     }
 
-    g_bPlayerVoted[client] = true;
-    g_iVoteRequests++;
+    SetPlayerVoteRequested(client, kind, true);
+    IncrementVoteRequestCount(kind);
 
-    CPrintToChatAll("{blue}[WhaleScramble]{default} %N requested a scramble (%d/4).", client, g_iVoteRequests);
-    LogWhale("Vote request counted: %N (%d/%d).", client, g_iVoteRequests, 4);
+    int requestCount = GetVoteRequestCount(kind);
+    CPrintToChatAll("{blue}[WhaleScramble]{default} %N requested a %s vote (%d/4).", client, actionName, requestCount);
+    LogWhale("Vote request counted: %N kind=%s (%d/%d).", client, actionName, requestCount, 4);
 
-    if (g_iVoteRequests >= 4)
+    if (requestCount >= 4)
     {
-        StartScrambleVote(client, false, false);
+        StartVote(client, false, false, kind);
     }
 }
 
-static bool StartScrambleVote(int client, bool suppressFeedback, bool allowLowPop)
+static bool StartVote(int client, bool suppressFeedback, bool allowLowPop, WhaleVoteKind kind)
 {
-    LogWhale("Starting vote: caller=%d allowLowPop=%d suppressFeedback=%d.", client, allowLowPop ? 1 : 0, suppressFeedback ? 1 : 0);
+    char actionName[16];
+    GetVoteActionName(kind, actionName, sizeof(actionName));
+    LogWhale("Starting %s vote: caller=%d allowLowPop=%d suppressFeedback=%d.", actionName, client, allowLowPop ? 1 : 0, suppressFeedback ? 1 : 0);
 
     if (scrambleCooldown)
     {
         if (!suppressFeedback && client > 0 && IsClientInGame(client))
         {
-            CPrintToChat(client, "{blue}[WhaleScramble]{default} Scramble is on cooldown.");
+            CPrintToChat(client, "{blue}[WhaleScramble]{default} %s is on cooldown.", actionName);
         }
-        LogWhale("Vote start failed: scramble cooldown active.");
+        LogWhale("Vote start failed: %s cooldown active.", actionName);
         return false;
     }
 
@@ -358,7 +463,14 @@ static bool StartScrambleVote(int client, bool suppressFeedback, bool allowLowPo
     }
 
     g_hVote = new NativeVote(ScrambleVoteHandler, NativeVotesType_Custom_YesNo, MENU_ACTIONS_ALL);
-    NativeVotes_SetTitle(g_hVote, "Whale scramble teams?");
+    if (kind == WhaleVote_Surrender)
+    {
+        NativeVotes_SetTitle(g_hVote, "Surrender round?");
+    }
+    else
+    {
+        NativeVotes_SetTitle(g_hVote, "Whale scramble teams?");
+    }
 
     int voteTime = 4;
     if (g_hVoteTime != null)
@@ -376,12 +488,14 @@ static bool StartScrambleVote(int client, bool suppressFeedback, bool allowLowPo
         g_hVote.Close();
         g_hVote = null;
         g_bVoteAllowLowPop = false;
+        g_eActiveVoteKind = WhaleVote_None;
         LogWhale("Vote start failed: display to all returned false.");
         return false;
     }
 
     g_bVoteAllowLowPop = allowLowPop;
-    LogWhale("Vote started: duration=%d allowLowPop=%d.", voteTime, allowLowPop ? 1 : 0);
+    g_eActiveVoteKind = kind;
+    LogWhale("%s vote started: duration=%d allowLowPop=%d.", actionName, voteTime, allowLowPop ? 1 : 0);
     return true;
 }
 
@@ -421,6 +535,8 @@ static bool StartConfiguredWhaleScramble(int issuer, bool broadcastFailures, boo
 
 public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, int param2)
 {
+    WhaleVoteKind voteKind = g_eActiveVoteKind;
+
     switch (action)
     {
         case MenuAction_End:
@@ -429,6 +545,7 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
             g_hVote = null;
             g_bVoteRunning = false;
             g_bVoteAllowLowPop = false;
+            g_eActiveVoteKind = WhaleVote_None;
             ResetVotes();
             LogWhale("Vote ended.");
             return 0;
@@ -444,6 +561,7 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
                 NativeVotes_DisplayFail(vote, NativeVotesFail_Generic);
             }
             g_bVoteAllowLowPop = false;
+            g_eActiveVoteKind = WhaleVote_None;
             LogWhale("Vote cancelled: %d.", param1);
             return 0;
         }
@@ -472,18 +590,47 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
             }
             else
             {
-                bool started = StartConfiguredWhaleScramble(0, true, g_bVoteAllowLowPop);
-                if (started)
+                bool success = false;
+                if (voteKind == WhaleVote_Surrender)
                 {
-                    NativeVotes_DisplayPassCustom(vote, "Vote passed. Whale scrambling teams...");
-                    LogWhale("Vote passed: yes=%d total=%d (%.1f%%).", yesVotes, totalVotes, yesPercent * 100.0);
+                    StartScrambleCooldown();
+                    ServerCommand("mp_scrambleteams");
+                    success = true;
                 }
                 else
                 {
-                    NativeVotes_DisplayPassCustom(vote, "Vote passed. Scramble conditions not met.");
-                    LogWhale("Vote passed but scramble conditions not met.");
+                    success = StartConfiguredWhaleScramble(0, true, g_bVoteAllowLowPop);
+                }
+
+                if (success)
+                {
+                    if (voteKind == WhaleVote_Surrender)
+                    {
+                        NativeVotes_DisplayPassCustom(vote, "Vote passed. Surrendering round...");
+                        CPrintToChatAll("{blue}[WhaleScramble]{default} Surrender vote passed.");
+                        LogWhale("Surrender vote passed: yes=%d total=%d (%.1f%%).", yesVotes, totalVotes, yesPercent * 100.0);
+                    }
+                    else
+                    {
+                        NativeVotes_DisplayPassCustom(vote, "Vote passed. Whale scrambling teams...");
+                        LogWhale("Vote passed: yes=%d total=%d (%.1f%%).", yesVotes, totalVotes, yesPercent * 100.0);
+                    }
+                }
+                else
+                {
+                    if (voteKind == WhaleVote_Surrender)
+                    {
+                        NativeVotes_DisplayPassCustom(vote, "Vote passed. Unable to surrender right now.");
+                        LogWhale("Surrender vote passed but command could not be issued.");
+                    }
+                    else
+                    {
+                        NativeVotes_DisplayPassCustom(vote, "Vote passed. Scramble conditions not met.");
+                        LogWhale("Vote passed but scramble conditions not met.");
+                    }
                 }
                 g_bVoteAllowLowPop = false;
+                g_eActiveVoteKind = WhaleVote_None;
             }
             return 0;
         }
@@ -493,11 +640,14 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
 
 static void ResetVotes()
 {
-    g_iVoteRequests = 0;
+    g_iScrambleVoteRequests = 0;
+    g_iSurrenderVoteRequests = 0;
     g_bVoteRunning = false;
+    g_eActiveVoteKind = WhaleVote_None;
     for (int i = 1; i <= MaxClients; i++)
     {
-        g_bPlayerVoted[i] = false;
+        g_bPlayerRequestedScramble[i] = false;
+        g_bPlayerRequestedSurrender[i] = false;
     }
 }
 
