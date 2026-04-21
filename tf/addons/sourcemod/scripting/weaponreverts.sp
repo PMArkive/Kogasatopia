@@ -1398,10 +1398,10 @@ public MRESReturn CanFireCriticalShot_Post(int weapon, DHookReturn hReturn, DHoo
 // Gas passer buff is a candidate for removal, it's uninspired and could be more creative
 public TF2_OnConditionAdded(int client, TFCond condition)
 {
-	/*if (condition == TFCond_Gas) //If gas is applied
+	if (condition == TFCond_Gas) //If gas is applied
 	{
 		TF2_AddCondition(client, TFCond_Jarated, 6.0); //Apply Jarate for 6 seconds
-	}*/
+	}
 
 	if (condition == TFCond_Cloaked)
 	{
