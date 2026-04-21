@@ -506,6 +506,19 @@ static bool StartVote(int client, bool suppressFeedback, bool allowLowPop, Whale
     GetVoteActionName(kind, actionName, sizeof(actionName));
     LogWhale("Starting %s vote: caller=%d allowLowPop=%d suppressFeedback=%d.", actionName, client, allowLowPop ? 1 : 0, suppressFeedback ? 1 : 0);
 
+    if (kind == WhaleVote_Surrender)
+    {
+        if (client <= 0 || !IsClientInGame(client) || !IsPlayerOnPlayableTeam(client))
+        {
+            if (!suppressFeedback && client > 0 && IsClientInGame(client))
+            {
+                CPrintToChat(client, "{gold}[WhaleScramble] {default}Only teams {red}RED {default}and {blue}BLU{default} can surrender!");
+            }
+            LogWhale("Vote start failed: surrender caller invalid team (client=%d team=%d).", client, (client > 0 && IsClientInGame(client)) ? GetClientTeam(client) : 0);
+            return false;
+        }
+    }
+
     if (scrambleCooldown)
     {
         if (!suppressFeedback && client > 0 && IsClientInGame(client))
@@ -678,6 +691,14 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
         }
         case MenuAction_VoteEnd:
         {
+            if (voteKind == WhaleVote_None)
+            {
+                NativeVotes_DisplayFail(vote, NativeVotesFail_Generic);
+                g_bVoteAllowLowPop = false;
+                LogWhale("Vote end failed closed: active vote kind missing.");
+                return 0;
+            }
+
             int votes = 0;
             int totalVotes = 0;
             NativeVotes_GetInfo(param2, votes, totalVotes);
@@ -704,6 +725,14 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
                 bool success = false;
                 if (voteKind == WhaleVote_Surrender)
                 {
+                    int winningTeamNum = GetOpposingTeam(g_iActiveSurrenderTeam);
+                    if (g_iActiveSurrenderTeam != TEAM_RED && g_iActiveSurrenderTeam != TEAM_BLU || winningTeamNum == 0)
+                    {
+                        NativeVotes_DisplayFail(vote, NativeVotesFail_Generic);
+                        g_bVoteAllowLowPop = false;
+                        LogWhale("Surrender vote failed closed: invalid active surrender team=%d.", g_iActiveSurrenderTeam);
+                        return 0;
+                    }
                     StartScrambleCooldown();
                     ServerCommand("mp_scrambleteams");
                     success = true;
@@ -772,12 +801,17 @@ static void ResetVotes()
 
 static void ResetSurrenderVotes()
 {
+    bool preserveActiveSurrenderVote = g_bVoteRunning && g_eActiveVoteKind == WhaleVote_Surrender;
+
     g_iSurrenderVoteRequests = 0;
-    if (g_eActiveVoteKind == WhaleVote_Surrender)
+    if (!preserveActiveSurrenderVote && g_eActiveVoteKind == WhaleVote_Surrender)
     {
         g_eActiveVoteKind = WhaleVote_None;
     }
-    g_iActiveSurrenderTeam = 0;
+    if (!preserveActiveSurrenderVote)
+    {
+        g_iActiveSurrenderTeam = 0;
+    }
     for (int i = 1; i <= MaxClients; i++)
     {
         g_bPlayerRequestedSurrender[i] = false;
