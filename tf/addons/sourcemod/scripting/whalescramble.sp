@@ -44,6 +44,8 @@ enum WhaleVoteKind
 
 bool g_bPlayerRequestedScramble[MAXPLAYERS + 1];
 bool g_bPlayerRequestedSurrender[MAXPLAYERS + 1];
+int g_iPlayerSurrenderVoteTeam[MAXPLAYERS + 1];
+char g_sPlayerSurrenderVoteSteamId[MAXPLAYERS + 1][32];
 int g_iScrambleVoteRequests = 0;
 int g_iSurrenderVoteRequests = 0;
 bool g_bVoteRunning = false;
@@ -115,6 +117,7 @@ public void OnPluginStart()
     AddCommandListener(SayListener, "say");
     AddCommandListener(SayListener, "say_team");
     HookEvent("teamplay_round_win", Event_RoundWin, EventHookMode_PostNoCopy);
+    HookEvent("player_team", Event_PlayerTeam, EventHookMode_Post);
 }
 
 public void OnAllPluginsLoaded()
@@ -179,11 +182,7 @@ public void OnClientDisconnect(int client)
     }
     if (g_bPlayerRequestedSurrender[client])
     {
-        g_bPlayerRequestedSurrender[client] = false;
-        if (g_iSurrenderVoteRequests > 0)
-        {
-            g_iSurrenderVoteRequests--;
-        }
+        ClearClientSurrenderVote(client);
     }
 }
 
@@ -294,6 +293,28 @@ public void Event_RoundWin(Event event, const char[] name, bool dontBroadcast)
     }
 }
 
+public void Event_PlayerTeam(Event event, const char[] name, bool dontBroadcast)
+{
+    int client = GetClientOfUserId(event.GetInt("userid"));
+    if (client <= 0 || client > MaxClients)
+    {
+        return;
+    }
+
+    if (!g_bPlayerRequestedSurrender[client])
+    {
+        return;
+    }
+
+    int oldTeam = event.GetInt("oldteam");
+    int newTeam = event.GetInt("team");
+    if (event.GetBool("disconnect") || oldTeam != newTeam)
+    {
+        LogWhale("Cleared surrender vote on team change: %N old=%d new=%d disconnect=%d.", client, oldTeam, newTeam, event.GetBool("disconnect") ? 1 : 0);
+        ClearClientSurrenderVote(client);
+    }
+}
+
 static void UpdateNativeVotes()
 {
     g_bNativeVotes = LibraryExists("nativevotes") && NativeVotes_IsVoteTypeSupported(NativeVotesType_Custom_YesNo);
@@ -340,6 +361,17 @@ static void SetPlayerVoteRequested(int client, WhaleVoteKind kind, bool value)
     }
 
     g_bPlayerRequestedScramble[client] = value;
+}
+
+static void ClearClientSurrenderVote(int client)
+{
+    g_bPlayerRequestedSurrender[client] = false;
+    g_iPlayerSurrenderVoteTeam[client] = 0;
+    g_sPlayerSurrenderVoteSteamId[client][0] = '\0';
+    if (g_iSurrenderVoteRequests > 0)
+    {
+        g_iSurrenderVoteRequests--;
+    }
 }
 
 static bool HasPlayerRequestedVote(int client, WhaleVoteKind kind)
@@ -401,6 +433,14 @@ static void HandleVoteRequest(int client, WhaleVoteKind kind)
 
     SetPlayerVoteRequested(client, kind, true);
     IncrementVoteRequestCount(kind);
+    if (kind == WhaleVote_Surrender)
+    {
+        g_iPlayerSurrenderVoteTeam[client] = GetClientTeam(client);
+        if (!GetClientAuthId(client, AuthId_SteamID64, g_sPlayerSurrenderVoteSteamId[client], sizeof(g_sPlayerSurrenderVoteSteamId[]), true))
+        {
+            g_sPlayerSurrenderVoteSteamId[client][0] = '\0';
+        }
+    }
 
     int requestCount = GetVoteRequestCount(kind);
     CPrintToChatAll("{blue}[WhaleScramble]{default} %N requested a %s vote (%d/4).", client, actionName, requestCount);
@@ -661,6 +701,8 @@ static void ResetVotes()
     {
         g_bPlayerRequestedScramble[i] = false;
         g_bPlayerRequestedSurrender[i] = false;
+        g_iPlayerSurrenderVoteTeam[i] = 0;
+        g_sPlayerSurrenderVoteSteamId[i][0] = '\0';
     }
 }
 
