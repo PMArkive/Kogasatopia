@@ -73,7 +73,7 @@ static const char g_PyroReverts[][] = {
 
 static const char g_PyroCustom[][] = {
     "\x01[Primary] Stock Shotgun\n",
-    "\x01[Primary] Hitscan Flamethrower: Fires three bullets that ignite targets within Ambassador range, deals 65 base damage, consumes 10 ammo per shot\n",
+    "\x01[Primary] Hitscan Flamethrower: A shotgun that fires two bullets with a tighter spread, deals 80 base damage, consumes 5 ammo per shot, +30 health on kill\n",
     "\x01[Secondary] Hoshino's Shotgun - Stock Reskin\n",
     "\x01[Secondary] Flame Shotgun: {green}Hitting a target accurately twice creates a fiery explosion, accurate shots cost no ammo,{red} -15% clip size, -30% damage penalty\n",
     "\x01[Secondary] Hitscan Flaregun: Fires one bullet that deals 65 base damage, mini crits burning targets\n",
@@ -223,7 +223,7 @@ public OnPluginStart()
 static const char g_WelcomeMsg[][] = {
     "{peachpuff}Welcome to {unique}Gensokyo{peachpuff} %N!",
     "{peachpuff}This server has new weapons and stuff like that; use {lightskyblue}!info",
-    "{peachpuff}Read more with {peachpuff} or see our group at {unique}!steam"
+    "{peachpuff}Read more with {unique}!info{peachpuff} or see our group at {unique}!steam"
 };
 
 // Welcome message components with git plugin
@@ -436,7 +436,7 @@ public Action:Command_news(int client, int args)
 
 public Action:Command_Rules(int client, int args)
 {
-    char deez[256] = "{chartreuse}Server Rules:\n{unique}No Hacking/Friendlies/Gross Sprays\n{violet}For the love of God you're not allowed to make chat servers or funnel people into different games";
+    char deez[256] = "{chartreuse}Server Rules:\n{unique}No Hacking/Friendlies/Gross Sprays\n{paleturquoise}Don't talk about retarded shit like women and drugs\n{violet}For the love of God you're not allowed to make chat servers or funnel people into different games";
     CPrintToChat(client, "%s", deez);
     return Plugin_Handled;
 }
