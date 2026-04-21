@@ -183,7 +183,9 @@ public void OnClientDisconnect(int client)
     }
     if (g_bPlayerRequestedSurrender[client])
     {
+        LogWhale("Cleared surrender vote on disconnect: %N team=%d.", client, GetClientTeam(client));
         ClearClientSurrenderVote(client);
+        LogSurrenderState("disconnect_clear");
     }
 }
 
@@ -265,7 +267,12 @@ public Action SayListener(int client, const char[] command, int argc)
 public void Event_RoundWin(Event event, const char[] name, bool dontBroadcast)
 {
     ClearScrambleCooldown();
-    ResetSurrenderVotes();
+    LogWhale("Round win: full_round=%d voteRunning=%d activeKind=%d activeTeam=%d.",
+        event.GetBool("full_round") ? 1 : 0,
+        g_bVoteRunning ? 1 : 0,
+        g_eActiveVoteKind,
+        g_iActiveSurrenderTeam);
+    ResetSurrenderVotes("round_win");
 
     if (g_hAutoRounds == null)
     {
@@ -314,6 +321,7 @@ public void Event_PlayerTeam(Event event, const char[] name, bool dontBroadcast)
     {
         LogWhale("Cleared surrender vote on team change: %N old=%d new=%d disconnect=%d.", client, oldTeam, newTeam, event.GetBool("disconnect") ? 1 : 0);
         ClearClientSurrenderVote(client);
+        LogSurrenderState("team_change_clear");
     }
 }
 
@@ -373,6 +381,43 @@ static void GetColoredTeamName(int team, char[] buffer, int maxlen)
     strcopy(buffer, maxlen, "{default}UNKNOWN{default}");
 }
 
+static void GetVoteKindName(WhaleVoteKind kind, char[] buffer, int maxlen)
+{
+    switch (kind)
+    {
+        case WhaleVote_Scramble:
+        {
+            strcopy(buffer, maxlen, "scramble");
+            return;
+        }
+        case WhaleVote_Surrender:
+        {
+            strcopy(buffer, maxlen, "surrender");
+            return;
+        }
+    }
+
+    strcopy(buffer, maxlen, "none");
+}
+
+static int GetPlayableTeamClientCount(int team)
+{
+    int count = 0;
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (!IsClientInGame(i) || IsFakeClient(i))
+        {
+            continue;
+        }
+
+        if (GetClientTeam(i) == team)
+        {
+            count++;
+        }
+    }
+    return count;
+}
+
 static bool ShouldIgnoreScrambleImmunity(int totalPlayers, bool randomMode)
 {
     if (randomMode)
@@ -399,6 +444,23 @@ static int GetSurrenderVoteCountForTeam(int team)
         }
     }
     return count;
+}
+
+static void LogSurrenderState(const char[] reason)
+{
+    char voteKind[16];
+    GetVoteKindName(g_eActiveVoteKind, voteKind, sizeof(voteKind));
+
+    LogWhale("Surrender state [%s]: reqRed=%d reqBlu=%d playersRed=%d playersBlu=%d voteRunning=%d voteKind=%s activeTeam=%d cooldown=%d.",
+        reason,
+        GetSurrenderVoteCountForTeam(TEAM_RED),
+        GetSurrenderVoteCountForTeam(TEAM_BLU),
+        GetPlayableTeamClientCount(TEAM_RED),
+        GetPlayableTeamClientCount(TEAM_BLU),
+        g_bVoteRunning ? 1 : 0,
+        voteKind,
+        g_iActiveSurrenderTeam,
+        scrambleCooldown ? 1 : 0);
 }
 
 static void SetPlayerVoteRequested(int client, WhaleVoteKind kind, bool value)
@@ -483,12 +545,23 @@ static void HandleVoteRequest(int client, WhaleVoteKind kind)
     if (kind == WhaleVote_Surrender)
     {
         requestCount = GetSurrenderVoteCountForTeam(g_iPlayerSurrenderVoteTeam[client]);
+        LogWhale("Surrender request counted: %N team=%d teamCount=%d redRequests=%d bluRequests=%d.",
+            client,
+            g_iPlayerSurrenderVoteTeam[client],
+            requestCount,
+            GetSurrenderVoteCountForTeam(TEAM_RED),
+            GetSurrenderVoteCountForTeam(TEAM_BLU));
+        LogSurrenderState("request_counted");
     }
     CPrintToChatAll("{blue}[WhaleScramble]{default} %N requested a %s vote (%d/4).", client, actionName, requestCount);
     LogWhale("Vote request counted: %N kind=%s (%d/%d).", client, actionName, requestCount, 4);
 
     if (requestCount >= 4)
     {
+        if (kind == WhaleVote_Surrender)
+        {
+            LogWhale("Surrender threshold reached: team=%d trigger=%N.", g_iPlayerSurrenderVoteTeam[client], client);
+        }
         StartVote(client, false, false, kind);
     }
 }
@@ -510,6 +583,14 @@ static bool StartVote(int client, bool suppressFeedback, bool allowLowPop, Whale
             LogWhale("Vote start failed: surrender caller invalid team (client=%d team=%d).", client, (client > 0 && IsClientInGame(client)) ? GetClientTeam(client) : 0);
             return false;
         }
+
+        LogWhale("Starting surrender vote: caller=%N callerTeam=%d redRequests=%d bluRequests=%d allowLowPop=%d suppressFeedback=%d.",
+            client,
+            GetClientTeam(client),
+            GetSurrenderVoteCountForTeam(TEAM_RED),
+            GetSurrenderVoteCountForTeam(TEAM_BLU),
+            allowLowPop ? 1 : 0,
+            suppressFeedback ? 1 : 0);
     }
 
     if (scrambleCooldown)
@@ -610,7 +691,11 @@ static bool StartVote(int client, bool suppressFeedback, bool allowLowPop, Whale
     {
         g_iActiveSurrenderTeam = 0;
     }
-    LogWhale("%s vote started: duration=%d allowLowPop=%d.", actionName, voteTime, allowLowPop ? 1 : 0);
+    LogWhale("%s vote started: duration=%d allowLowPop=%d activeSurrenderTeam=%d.", actionName, voteTime, allowLowPop ? 1 : 0, g_iActiveSurrenderTeam);
+    if (kind == WhaleVote_Surrender)
+    {
+        LogSurrenderState("vote_started");
+    }
     return true;
 }
 
@@ -651,6 +736,10 @@ static bool StartConfiguredWhaleScramble(int issuer, bool broadcastFailures, boo
 public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, int param2)
 {
     WhaleVoteKind voteKind = g_eActiveVoteKind;
+    if (voteKind == WhaleVote_Surrender)
+    {
+        LogWhale("Surrender vote action: action=%d param1=%d param2=%d activeTeam=%d voteRunning=%d.", action, param1, param2, g_iActiveSurrenderTeam, g_bVoteRunning ? 1 : 0);
+    }
 
     switch (action)
     {
@@ -667,6 +756,10 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
                 ResetScrambleVotes();
             }
             LogWhale("Vote ended.");
+            if (voteKind == WhaleVote_Surrender)
+            {
+                LogSurrenderState("vote_end");
+            }
             return 0;
         }
         case MenuAction_VoteCancel:
@@ -687,6 +780,10 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
                 ResetScrambleVotes();
             }
             LogWhale("Vote cancelled: %d.", param1);
+            if (voteKind == WhaleVote_Surrender)
+            {
+                LogSurrenderState("vote_cancel");
+            }
             return 0;
         }
         case MenuAction_VoteEnd:
@@ -719,6 +816,10 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
                 CPrintToChatAll("Vote failed (Yes %.0f%%).", yesPercent * 100.0);
                 g_bVoteAllowLowPop = false;
                 LogWhale("Vote failed: yes=%d total=%d (%.1f%%).", yesVotes, totalVotes, yesPercent * 100.0);
+                if (voteKind == WhaleVote_Surrender)
+                {
+                    LogSurrenderState("vote_fail");
+                }
             }
             else
             {
@@ -733,6 +834,11 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
                         LogWhale("Surrender vote failed closed: invalid active surrender team=%d.", g_iActiveSurrenderTeam);
                         return 0;
                     }
+                    LogWhale("Surrender vote passed: issuing mp_scrambleteams surrenderTeam=%d winningTeam=%d yes=%d total=%d.",
+                        g_iActiveSurrenderTeam,
+                        winningTeamNum,
+                        yesVotes,
+                        totalVotes);
                     StartScrambleCooldown();
                     ServerCommand("mp_scrambleteams");
                     success = true;
@@ -753,6 +859,7 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
                         GetColoredTeamName(GetOpposingTeam(g_iActiveSurrenderTeam), winningTeam, sizeof(winningTeam));
                         CPrintToChatAll("Team %s surrendered to %s!", surrenderTeam, winningTeam);
                         LogWhale("Surrender vote passed: yes=%d total=%d (%.1f%%).", yesVotes, totalVotes, yesPercent * 100.0);
+                        LogSurrenderState("vote_pass");
                     }
                     else
                     {
@@ -795,15 +902,16 @@ static void ResetScrambleVotes()
 static void ResetVotes()
 {
     ResetScrambleVotes();
-    ResetSurrenderVotes();
+    ResetSurrenderVotes("full_reset");
     g_bVoteRunning = false;
     g_eActiveVoteKind = WhaleVote_None;
     g_iActiveSurrenderTeam = 0;
 }
 
-static void ResetSurrenderVotes()
+static void ResetSurrenderVotes(const char[] reason)
 {
     bool preserveActiveSurrenderVote = g_bVoteRunning && g_eActiveVoteKind == WhaleVote_Surrender;
+    LogWhale("Reset surrender votes: reason=%s preserveActive=%d.", reason, preserveActiveSurrenderVote ? 1 : 0);
 
     if (!preserveActiveSurrenderVote && g_eActiveVoteKind == WhaleVote_Surrender)
     {
@@ -818,6 +926,7 @@ static void ResetSurrenderVotes()
         g_bPlayerRequestedSurrender[i] = false;
         g_iPlayerSurrenderVoteTeam[i] = 0;
     }
+    LogSurrenderState(reason);
 }
 
 static void StartScrambleCooldown()
@@ -1287,7 +1396,7 @@ public Action Timer_DoSwap(Handle timer, DataPack pack)
     moved = pairCount * 2;
     if (moved > 0)
     {
-        ResetSurrenderVotes();
+        ResetSurrenderVotes("whalescramble_execute");
         StartScrambleCooldown();
         CPrintToChatAll("{tomato}[{purple}Gap{tomato}]{default} {gold}Whalescrambling{default} %d players!", moved);
         LogWhale("Scramble executed: moved=%d pairs=%d.", moved, pairCount);
