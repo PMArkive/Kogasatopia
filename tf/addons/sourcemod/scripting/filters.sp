@@ -149,6 +149,40 @@ bool Filters_RedlistEnabled()
     return g_hRedlistEnabled != null && g_hRedlistEnabled.BoolValue;
 }
 
+static int Filters_GetFilterMode()
+{
+    if (g_sChatMode2 == INVALID_HANDLE)
+    {
+        return 0;
+    }
+
+    int mode = GetConVarInt(g_sChatMode2);
+    if (mode < 0)
+    {
+        return 0;
+    }
+    if (mode > 2)
+    {
+        return 2;
+    }
+    return mode;
+}
+
+static bool Filters_IsCordModeEnabled()
+{
+    return Filters_GetFilterMode() != 0;
+}
+
+static bool Filters_CordModeWhitelistedCanReceiveBlacklisted()
+{
+    return Filters_GetFilterMode() != 0;
+}
+
+static bool Filters_CordModeBlacklistedCanReceiveWhitelisted()
+{
+    return Filters_GetFilterMode() == 1;
+}
+
 void Filters_LogDebug(const char[] fmt, any ...)
 {
     if (!Filters_DebugEnabled())
@@ -397,7 +431,7 @@ public void OnPluginStart()
 
     // Truthtext Convars
     g_sEnabled = CreateConVar("nobroly", "1", "If 0, filter chat to one word");
-    g_sChatMode2 = CreateConVar("filtermode", "0", "Enable/Disable the quarantined filter mode");
+    g_sChatMode2 = CreateConVar("filtermode", "0", "0=off, 1=quarantine with mutual whitelist/blacklist visibility, 2=quarantine with whitelist monitoring only");
     g_hChatDebug = CreateConVar("filters_chat_debug", "0", "Enable verbose debug logging for chat relay");
     g_hChatFrontend = CreateConVar("filters_chat_frontend", "1", "Enable/Disable db functions");
     g_hFiltersEnabled = CreateConVar("filters", "0", "If 0, blacklist word matching is disabled.");
@@ -1192,7 +1226,7 @@ public Action OnClientSayCommand(int client, const char[] command, const char[] 
 void BuildChatContext(int client, const char[] sArgs, ChatContext context)
 {
     context.pluginEnabled = GetConVarInt(g_sEnabled) != 0;
-    context.cordMode = GetConVarInt(g_sChatMode2) != 0;
+    context.cordMode = Filters_IsCordModeEnabled();
     context.isBlacklisted = g_PlayerState[client].isBlacklisted;
     context.isWhitelisted = g_PlayerState[client].isWhitelisted;
     context.isFilterWhitelisted = g_PlayerState[client].isFilterWhitelisted;
@@ -1388,7 +1422,7 @@ bool Filters_CanUseHelpCommand(int client)
 void Filters_PrintHelp(int client)
 {
     CPrintToChat(client, "{default}[Filters] nobroly - If 0, filter chat to one word.");
-    CPrintToChat(client, "{default}[Filters] filtermode - Enable/Disable the quarantined filter mode.");
+    CPrintToChat(client, "{default}[Filters] filtermode - 0=off, 1=quarantine with mutual whitelist/blacklist visibility, 2=quarantine with whitelist monitoring only.");
     CPrintToChat(client, "{default}[Filters] filters_chat_debug - Enable verbose debug logging for chat relay.");
     CPrintToChat(client, "{default}[Filters] filters_chat_frontend - Enable/Disable db functions.");
     CPrintToChat(client, "{default}[Filters] filters_filters - If 0, blacklist word matching is disabled.");
@@ -1574,7 +1608,8 @@ bool TryHandleTeamChat(int client, const char[] command, const char[] sArgs, con
 
     char output[256];
     Format(output, sizeof(output), "%s%s%s %s%s : %s", messageColorTag, deadPrefix, tag, displayName, messageColorTag, sArgs);
-    bool cordMode = GetConVarInt(g_sChatMode2) != 0;
+    int filterMode = Filters_GetFilterMode();
+    bool cordMode = filterMode != 0;
     if (cordMode)
     {
         if (g_PlayerState[client].isBlacklisted)
@@ -1587,7 +1622,10 @@ bool TryHandleTeamChat(int client, const char[] command, const char[] sArgs, con
                 }
             }
 
-            SendToWhitelistedAdminsBlacklisted(client, output, "fm1:");
+            if (Filters_CordModeWhitelistedCanReceiveBlacklisted())
+            {
+                SendToWhitelistedAdminsBlacklisted(client, output, "fm1:");
+            }
             PrintToServer("x: %s", output);
             return true;
         }
@@ -1611,7 +1649,7 @@ bool TryHandleTeamChat(int client, const char[] command, const char[] sArgs, con
             bool isBlacklisted = g_PlayerState[i].isBlacklisted;
             if (GetClientTeam(i) == senderTeam)
             {
-                if (!isBlacklisted || isWhitelisted)
+                if (!isBlacklisted || isWhitelisted || (g_PlayerState[client].isWhitelisted && Filters_CordModeBlacklistedCanReceiveWhitelisted()))
                 {
                     Filters_SendChatToReceiver(i, client, output);
                 }
@@ -2149,7 +2187,8 @@ static void Filters_PrintToChatAllEx(int sender, const char[] message)
 
 void Filters_UpdateVoiceOverrides()
 {
-    bool cordMode = GetConVarInt(g_sChatMode2) != 0;
+    int filterMode = Filters_GetFilterMode();
+    bool cordMode = filterMode != 0;
     bool redlistEnabled = Filters_RedlistEnabled();
     for (int sender = 1; sender <= MaxClients; sender++)
     {
@@ -2175,9 +2214,14 @@ void Filters_UpdateVoiceOverrides()
             {
                 bool receiverBlacklisted = g_PlayerState[receiver].isBlacklisted;
                 bool receiverWhitelisted = g_PlayerState[receiver].isWhitelisted;
-                shouldBlock = receiverBlacklisted
-                    ? !senderBlacklisted
-                    : (senderBlacklisted && !receiverBlacklisted && !receiverWhitelisted);
+                if (receiverBlacklisted)
+                {
+                    shouldBlock = !senderBlacklisted && !(g_PlayerState[sender].isWhitelisted && Filters_CordModeBlacklistedCanReceiveWhitelisted());
+                }
+                else
+                {
+                    shouldBlock = senderBlacklisted && !receiverWhitelisted;
+                }
             }
 
             if (shouldBlock)
@@ -2222,7 +2266,10 @@ bool HandleCordModeBlacklistedChat(int client, const char[] message, const ChatC
         }
     }
 
-    SendToWhitelistedAdminsBlacklisted(client, message, "fm1:");
+    if (Filters_CordModeWhitelistedCanReceiveBlacklisted())
+    {
+        SendToWhitelistedAdminsBlacklisted(client, message, "fm1:");
+    }
     PrintToServer("x: %s", message);
     return true;
 }
@@ -2317,7 +2364,7 @@ bool HandleEnabledChat(int client, const char[] message, const ChatContext conte
             {
                 continue;
             }
-            if (!g_PlayerState[i].isBlacklisted
+            if ((!g_PlayerState[i].isBlacklisted || (context.isWhitelisted && Filters_CordModeBlacklistedCanReceiveWhitelisted()))
                 && (!teamChatOnly || GetClientTeam(i) == GetClientTeam(client)))
             {
                 Filters_SendChatToReceiver(i, client, message);
