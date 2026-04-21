@@ -9,6 +9,7 @@
 #define CONFIG_FILE "configs/saysounds.cfg"
 #define MAX_COMMAND_NAME 64
 #define MAX_GROUP_NAME 32
+#define MAX_GROUP_PREF_VALUE 512
 #define DEFAULT_GROUP "all"
 #define DEFAULT_DEATH_COMMAND "doh"
 #define TOUHOU_DEATH_SOUND_ATTR "touhou death sound"
@@ -33,11 +34,11 @@ float g_fClientVolume[MAXPLAYERS + 1];
 float g_fNextAllowedSound[MAXPLAYERS + 1];
 char g_szDeathSound[MAXPLAYERS + 1][MAX_COMMAND_NAME * 4];
 char g_szKillSound[MAXPLAYERS + 1][MAX_COMMAND_NAME * 4];
-char g_szClientGroup[MAXPLAYERS + 1][MAX_GROUP_NAME];
+StringMap g_hClientDisabledGroups[MAXPLAYERS + 1];
 Handle g_hVolumeCookie = INVALID_HANDLE;
 Handle g_hDeathCookie = INVALID_HANDLE;
 Handle g_hKillCookie = INVALID_HANDLE;
-Handle g_hGroupCookie = INVALID_HANDLE;
+Handle g_hDisabledGroupsCookie = INVALID_HANDLE;
 ConVar g_hForce;
 
 const float DEFAULT_VOLUME = 0.5;
@@ -71,9 +72,10 @@ public void OnPluginStart()
     g_hVolumeCookie = RegClientCookie("saysounds_volume", "Preferred say sound volume", CookieAccess_Public);
     g_hDeathCookie = RegClientCookie("saysounds_death", "Preferred saysound on death", CookieAccess_Public);
     g_hKillCookie = RegClientCookie("saysounds_kill", "Preferred saysound on kill", CookieAccess_Public);
-    g_hGroupCookie = RegClientCookie("saysounds_group", "Preferred saysound group", CookieAccess_Public);
+    g_hDisabledGroupsCookie = RegClientCookie("saysounds_disabled_groups", "Disabled saysound groups", CookieAccess_Public);
 
     RegConsoleCmd("sm_opt", Command_ToggleSoundOpt);
+    RegConsoleCmd("sm_opts", Command_ShowGroupOptions);
     RegConsoleCmd("sm_sounds", Command_ListSounds);
     RegConsoleCmd("sm_vol", Command_SetVolume);
     RegConsoleCmd("sm_diesound", Command_SetDeathSound);
@@ -93,7 +95,7 @@ public void OnPluginStart()
         g_fNextAllowedSound[i] = 0.0;
         g_szDeathSound[i][0] = '\0';
         g_szKillSound[i][0] = '\0';
-        strcopy(g_szClientGroup[i], sizeof(g_szClientGroup[]), DEFAULT_GROUP);
+        ResetClientGroupPreferenceState(i);
 
         if (IsClientInGame(i) && AreClientCookiesCached(i))
         {
@@ -130,6 +132,15 @@ public void OnPluginEnd()
         delete gGroupNames;
         gGroupNames = null;
     }
+
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (g_hClientDisabledGroups[i] != null)
+        {
+            delete g_hClientDisabledGroups[i];
+            g_hClientDisabledGroups[i] = null;
+        }
+    }
 }
 
 public void OnClientPutInServer(int client)
@@ -138,7 +149,7 @@ public void OnClientPutInServer(int client)
     g_fNextAllowedSound[client] = 0.0;
     g_szDeathSound[client][0] = '\0';
     g_szKillSound[client][0] = '\0';
-    strcopy(g_szClientGroup[client], sizeof(g_szClientGroup[]), DEFAULT_GROUP);
+    ResetClientGroupPreferenceState(client);
 
     if (AreClientCookiesCached(client))
     {
@@ -167,12 +178,19 @@ public void OnClientDisconnect(int client)
     g_fClientVolume[client] = DEFAULT_VOLUME;
     g_szDeathSound[client][0] = '\0';
     g_szKillSound[client][0] = '\0';
-    strcopy(g_szClientGroup[client], sizeof(g_szClientGroup[]), DEFAULT_GROUP);
+    ResetClientGroupPreferenceState(client);
 }
 
 public void OnConfigsExecuted()
 {
     LoadSaySoundConfig();
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (IsClientInGame(i) && AreClientCookiesCached(i))
+        {
+            LoadGroupPreference(i);
+        }
+    }
     PrecacheConfiguredSounds();
 }
 
@@ -591,6 +609,246 @@ static bool IsKnownGroup(const char[] groupName)
     return FindGroupIndex(normalized) != -1;
 }
 
+static void EnsureClientGroupPreferenceMap(int client)
+{
+    if (client <= 0 || client > MaxClients)
+    {
+        return;
+    }
+
+    if (g_hClientDisabledGroups[client] == null)
+    {
+        g_hClientDisabledGroups[client] = new StringMap();
+    }
+}
+
+static void ResetClientGroupPreferenceState(int client)
+{
+    EnsureClientGroupPreferenceMap(client);
+
+    if (g_hClientDisabledGroups[client] != null)
+    {
+        g_hClientDisabledGroups[client].Clear();
+    }
+}
+
+static bool IsClientGroupDisabled(int client, const char[] groupName)
+{
+    if (client <= 0 || client > MaxClients || !groupName[0] || StrEqual(groupName, DEFAULT_GROUP))
+    {
+        return false;
+    }
+
+    EnsureClientGroupPreferenceMap(client);
+
+    int disabled = 0;
+    return g_hClientDisabledGroups[client] != null
+        && g_hClientDisabledGroups[client].GetValue(groupName, disabled)
+        && disabled != 0;
+}
+
+static bool SetClientGroupDisabled(int client, const char[] groupName, bool disabled)
+{
+    if (client <= 0 || client > MaxClients || !groupName[0] || StrEqual(groupName, DEFAULT_GROUP) || !IsKnownGroup(groupName))
+    {
+        return false;
+    }
+
+    EnsureClientGroupPreferenceMap(client);
+
+    if (g_hClientDisabledGroups[client] == null)
+    {
+        return false;
+    }
+
+    if (disabled)
+    {
+        g_hClientDisabledGroups[client].SetValue(groupName, 1);
+    }
+    else
+    {
+        g_hClientDisabledGroups[client].Remove(groupName);
+    }
+
+    return true;
+}
+
+static void BuildGroupPreferenceValue(int client, char[] value, int valueLen)
+{
+    value[0] = '\0';
+
+    if (client <= 0 || client > MaxClients)
+    {
+        return;
+    }
+
+    EnsureClientGroupPreferenceMap(client);
+    if (g_hClientDisabledGroups[client] == null || gGroupNames == null)
+    {
+        return;
+    }
+
+    char groupName[MAX_GROUP_NAME];
+    int disabled = 0;
+
+    for (int i = 0; i < gGroupNames.Length; i++)
+    {
+        gGroupNames.GetString(i, groupName, sizeof(groupName));
+        if (StrEqual(groupName, DEFAULT_GROUP))
+        {
+            continue;
+        }
+
+        if (!g_hClientDisabledGroups[client].GetValue(groupName, disabled) || disabled == 0)
+        {
+            continue;
+        }
+
+        if (value[0])
+        {
+            StrCat(value, valueLen, ",");
+        }
+
+        StrCat(value, valueLen, groupName);
+    }
+}
+
+static void ParseGroupPreferenceValue(int client, const char[] rawValue)
+{
+    ResetClientGroupPreferenceState(client);
+
+    if (!rawValue[0])
+    {
+        return;
+    }
+
+    char working[MAX_GROUP_PREF_VALUE];
+    strcopy(working, sizeof(working), rawValue);
+    TrimString(working);
+    ToLowercaseInPlace(working, sizeof(working));
+
+    if (!working[0])
+    {
+        return;
+    }
+
+    char token[MAX_GROUP_NAME];
+    int start = 0;
+    int len = strlen(working);
+
+    while (start < len)
+    {
+        int commaPos = -1;
+        for (int i = start; i < len; i++)
+        {
+            if (working[i] == ',')
+            {
+                commaPos = i;
+                break;
+            }
+        }
+
+        int end = (commaPos == -1) ? len : commaPos;
+        int tokenLen = end - start;
+
+        if (tokenLen > 0 && tokenLen < sizeof(token))
+        {
+            for (int i = 0; i < tokenLen; i++)
+            {
+                token[i] = working[start + i];
+            }
+            token[tokenLen] = '\0';
+
+            TrimString(token);
+            ToLowercaseInPlace(token, sizeof(token));
+
+            if (token[0] && !StrEqual(token, DEFAULT_GROUP) && IsKnownGroup(token))
+            {
+                SetClientGroupDisabled(client, token, true);
+            }
+        }
+
+        start = end + 1;
+        if (start > len)
+        {
+            break;
+        }
+    }
+}
+
+static void ShowGroupOptionsMenu(int client)
+{
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return;
+    }
+
+    if (!gConfigLoaded || gGroupNames == null)
+    {
+        PrintToChat(client, "[SaySounds] Sounds are not ready yet. Try again soon.");
+        return;
+    }
+
+    Menu menu = new Menu(MenuHandler_GroupOptions);
+    menu.SetTitle("SaySound Groups");
+
+    char groupName[MAX_GROUP_NAME];
+    char display[128];
+    int itemCount = 0;
+
+    for (int i = 0; i < gGroupNames.Length; i++)
+    {
+        gGroupNames.GetString(i, groupName, sizeof(groupName));
+        if (StrEqual(groupName, DEFAULT_GROUP))
+        {
+            continue;
+        }
+
+        Format(display, sizeof(display), "%s (%s)", groupName, IsClientGroupDisabled(client, groupName) ? "disabled" : "enabled");
+        menu.AddItem(groupName, display);
+        itemCount++;
+    }
+
+    if (itemCount == 0)
+    {
+        delete menu;
+        PrintToChat(client, "[SaySounds] No sound groups are configured.");
+        return;
+    }
+
+    menu.ExitButton = true;
+    menu.Display(client, MENU_TIME_FOREVER);
+}
+
+public int MenuHandler_GroupOptions(Menu menu, MenuAction action, int client, int item)
+{
+    if (action == MenuAction_Select)
+    {
+        if (client <= 0 || !IsClientInGame(client))
+        {
+            return 0;
+        }
+
+        char groupName[MAX_GROUP_NAME];
+        menu.GetItem(item, groupName, sizeof(groupName));
+
+        bool disabled = !IsClientGroupDisabled(client, groupName);
+        if (SetClientGroupDisabled(client, groupName, disabled))
+        {
+            SaveGroupPreference(client);
+            PrintToChat(client, "[SaySounds] Group %s %s.", groupName, disabled ? "disabled" : "enabled");
+        }
+
+        ShowGroupOptionsMenu(client);
+    }
+    else if (action == MenuAction_End)
+    {
+        delete menu;
+    }
+
+    return 0;
+}
+
 public Action Command_ToggleSoundOpt(int client, int args)
 {
     if (client <= 0 || !IsClientInGame(client))
@@ -613,7 +871,7 @@ public Action Command_ToggleSoundOpt(int client, int args)
 
         if (StrEqual(arg, "on"))
         {
-            strcopy(g_szClientGroup[client], sizeof(g_szClientGroup[]), DEFAULT_GROUP);
+            ResetClientGroupPreferenceState(client);
             SaveGroupPreference(client);
             g_fClientVolume[client] = DEFAULT_VOLUME;
             SaveVolumePreference(client);
@@ -623,7 +881,7 @@ public Action Command_ToggleSoundOpt(int client, int args)
 
         if (StrEqual(arg, DEFAULT_GROUP))
         {
-            strcopy(g_szClientGroup[client], sizeof(g_szClientGroup[]), DEFAULT_GROUP);
+            ResetClientGroupPreferenceState(client);
             SaveGroupPreference(client);
             g_fClientVolume[client] = DEFAULT_VOLUME;
             SaveVolumePreference(client);
@@ -637,11 +895,10 @@ public Action Command_ToggleSoundOpt(int client, int args)
             return Plugin_Handled;
         }
 
-        strcopy(g_szClientGroup[client], sizeof(g_szClientGroup[]), arg);
+        bool disabled = !IsClientGroupDisabled(client, arg);
+        SetClientGroupDisabled(client, arg, disabled);
         SaveGroupPreference(client);
-        g_fClientVolume[client] = DEFAULT_VOLUME;
-        SaveVolumePreference(client);
-        PrintToChat(client, "[SaySounds] You're now only able to hear sound group \x03%s", arg);
+        PrintToChat(client, "[SaySounds] Group %s %s.", arg, disabled ? "disabled" : "enabled");
     }
     else
     {
@@ -653,15 +910,23 @@ public Action Command_ToggleSoundOpt(int client, int args)
         }
         else
         {
-            // No arguments and muted: enable all groups at default volume
-            strcopy(g_szClientGroup[client], sizeof(g_szClientGroup[]), DEFAULT_GROUP);
-            SaveGroupPreference(client);
             g_fClientVolume[client] = DEFAULT_VOLUME;
             SaveVolumePreference(client);
             PrintToChat(client, "[SaySounds] Say sounds enabled.");
         }
     }
 
+    return Plugin_Handled;
+}
+
+public Action Command_ShowGroupOptions(int client, int args)
+{
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return Plugin_Handled;
+    }
+
+    ShowGroupOptionsMenu(client);
     return Plugin_Handled;
 }
 
@@ -688,7 +953,7 @@ public Action Command_ListSounds(int client, int args)
         return Plugin_Handled;
 
     PrintToChat(client, "[SaySounds] Available commands:");
-    PrintToChat(client, "[SaySounds] (Use !opt to toggle sound playback; !vol <0.0-1.0> for custom volume)");
+    PrintToChat(client, "[SaySounds] (Use !opt to mute/unmute, !opts for group toggles, !vol <0.0-1.0> for custom volume)");
     for (int i = 0; i < gCommandNames.Length; i++)
     {
         char command[MAX_COMMAND_NAME];
@@ -1132,32 +1397,26 @@ void SaveVolumePreference(int client)
 
 void LoadGroupPreference(int client)
 {
-    strcopy(g_szClientGroup[client], sizeof(g_szClientGroup[]), DEFAULT_GROUP);
+    ResetClientGroupPreferenceState(client);
 
-    if (g_hGroupCookie == INVALID_HANDLE)
+    if (g_hDisabledGroupsCookie == INVALID_HANDLE)
     {
         return;
     }
 
-    char value[MAX_GROUP_NAME];
-    GetClientCookie(client, g_hGroupCookie, value, sizeof(value));
-    TrimString(value);
-    ToLowercaseInPlace(value, sizeof(value));
-
-    if (!value[0] || !IsKnownGroup(value))
-    {
-        return;
-    }
-
-    strcopy(g_szClientGroup[client], sizeof(g_szClientGroup[]), value);
+    char value[MAX_GROUP_PREF_VALUE];
+    GetClientCookie(client, g_hDisabledGroupsCookie, value, sizeof(value));
+    ParseGroupPreferenceValue(client, value);
 }
 
 void SaveGroupPreference(int client)
 {
-    if (g_hGroupCookie == INVALID_HANDLE || !AreClientCookiesCached(client))
+    if (g_hDisabledGroupsCookie == INVALID_HANDLE || !AreClientCookiesCached(client))
         return;
 
-    SetClientCookie(client, g_hGroupCookie, g_szClientGroup[client]);
+    char value[MAX_GROUP_PREF_VALUE];
+    BuildGroupPreferenceValue(client, value, sizeof(value));
+    SetClientCookie(client, g_hDisabledGroupsCookie, value);
 }
 
 static bool GetCommandSoundData(const char[] commandName, char[] soundPath, int soundLen, char[] groupName, int groupLen)
@@ -1263,17 +1522,7 @@ static bool GetCommandSoundData(const char[] commandName, char[] soundPath, int 
 
 static bool ClientMatchesGroup(int client, const char[] groupName)
 {
-    if (!groupName[0] || StrEqual(groupName, DEFAULT_GROUP))
-    {
-        return true;
-    }
-
-    if (!g_szClientGroup[client][0] || StrEqual(g_szClientGroup[client], DEFAULT_GROUP))
-    {
-        return true;
-    }
-
-    return StrEqual(g_szClientGroup[client], groupName);
+    return !IsClientGroupDisabled(client, groupName);
 }
 
 static bool CanPlaySaySoundToClient(int client, const char[] groupName, float &emitVolume, bool forcePlayback = false)
