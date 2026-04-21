@@ -90,8 +90,9 @@ public void OnPluginStart()
         RegConsoleCmd(SCRAMBLE_COMMANDS[i], Command_Scramble);
     }
     RegConsoleCmd("sm_votescramble", Command_Scramble);
+    RegConsoleCmd("sm_whalescramble", Command_Scramble);
     RegAdminCmd("sm_forcescramble", Command_WhaleScramble, ADMFLAG_GENERIC, "Immediately perform a whale scramble.");
-    RegAdminCmd("sm_whalescramble", Command_WhaleScramble, ADMFLAG_GENERIC, "Immediately perform a whale scramble.");
+    RegAdminCmd("sm_forcewhalescramble", Command_WhaleScramble, ADMFLAG_GENERIC, "Immediately perform a whale scramble.");
     RegAdminCmd("sm_whalescramblevote", Command_ForceScrambleVote, ADMFLAG_GENERIC, "Force a whale scramble vote.");
     RegAdminCmd("sm_forcescramblevote", Command_ForceScrambleVote, ADMFLAG_GENERIC, "Force a whale scramble vote.");
 
