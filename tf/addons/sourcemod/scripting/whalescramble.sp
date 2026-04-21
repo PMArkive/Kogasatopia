@@ -373,6 +373,16 @@ static void GetColoredTeamName(int team, char[] buffer, int maxlen)
     strcopy(buffer, maxlen, "{default}UNKNOWN{default}");
 }
 
+static bool ShouldIgnoreScrambleImmunity(int totalPlayers, bool randomMode)
+{
+    if (randomMode)
+    {
+        return totalPlayers <= (MAX_RANDOM_SWAP * 2);
+    }
+
+    return totalPlayers <= (MAX_TOP_SWAP * 2);
+}
+
 static int GetVoteRequestCount(WhaleVoteKind kind)
 {
     if (kind == WhaleVote_Surrender)
@@ -877,8 +887,23 @@ static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLow
         totalPlayers++;
         if (team == TEAM_RED) redCount++;
         else bluCount++;
+    }
 
-        if (IsScrambleImmune(i)) continue;
+    bool ignoreImmunity = ShouldIgnoreScrambleImmunity(totalPlayers, false);
+    if (ignoreImmunity)
+    {
+        LogWhale("Topswap scramble: ignoring immunity due to low player count total=%d threshold=%d.", totalPlayers, MAX_TOP_SWAP * 2);
+    }
+
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (!IsClientInGame(i)) continue;
+        if (IsFakeClient(i) && (g_hCountBots == null || !g_hCountBots.BoolValue)) continue;
+
+        int team = GetClientTeam(i);
+        if (team != TEAM_RED && team != TEAM_BLU) continue;
+
+        if (!ignoreImmunity && IsScrambleImmune(i)) continue;
 
         if (team == TEAM_RED) redEligible++;
         else bluEligible++;
@@ -943,7 +968,7 @@ static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLow
 
             int team = GetClientTeam(i);
             if (team != TEAM_RED && team != TEAM_BLU) continue;
-            if (IsScrambleImmune(i)) continue;
+            if (!ignoreImmunity && IsScrambleImmune(i)) continue;
 
             if (team == TEAM_RED) redEligible++;
             else bluEligible++;
@@ -1047,8 +1072,23 @@ static bool StartRandomWhaleScramble(int issuer, bool broadcastFailures, bool al
         totalPlayers++;
         if (team == TEAM_RED) redCount++;
         else bluCount++;
+    }
 
-        if (IsScrambleImmune(i)) continue;
+    bool ignoreImmunity = ShouldIgnoreScrambleImmunity(totalPlayers, true);
+    if (ignoreImmunity)
+    {
+        LogWhale("Random scramble: ignoring immunity due to low player count total=%d threshold=%d.", totalPlayers, MAX_RANDOM_SWAP * 2);
+    }
+
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (!IsClientInGame(i)) continue;
+        if (IsFakeClient(i) && (g_hCountBots == null || !g_hCountBots.BoolValue)) continue;
+
+        int team = GetClientTeam(i);
+        if (team != TEAM_RED && team != TEAM_BLU) continue;
+
+        if (!ignoreImmunity && IsScrambleImmune(i)) continue;
         if (!IsSimpleScrambleEligibleClass(i)) continue;
 
         if (team == TEAM_RED)
@@ -1112,7 +1152,7 @@ static bool StartRandomWhaleScramble(int issuer, bool broadcastFailures, bool al
 
             int team = GetClientTeam(i);
             if (team != TEAM_RED && team != TEAM_BLU) continue;
-            if (IsScrambleImmune(i)) continue;
+            if (!ignoreImmunity && IsScrambleImmune(i)) continue;
 
             if (team == TEAM_RED)
             {
