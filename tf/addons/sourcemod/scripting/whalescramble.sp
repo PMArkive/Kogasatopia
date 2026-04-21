@@ -32,7 +32,8 @@ static const char SCRAMBLE_KEYWORDS[][] =
 
 static const char SURRENDER_KEYWORDS[][] =
 {
-    "surrender"
+    "surrender",
+    "itsover"
 };
 
 enum WhaleVoteKind
@@ -110,6 +111,7 @@ public void OnPluginStart()
     RegConsoleCmd("sm_votescramble", Command_Scramble);
     RegConsoleCmd("sm_whalescramble", Command_Scramble);
     RegConsoleCmd("sm_surrender", Command_SurrenderRound);
+    RegConsoleCmd("sm_itsover", Command_SurrenderRound);
     RegAdminCmd("sm_forcescramble", Command_WhaleScramble, ADMFLAG_GENERIC, "Immediately perform a whale scramble.");
     RegAdminCmd("sm_forcewhalescramble", Command_WhaleScramble, ADMFLAG_GENERIC, "Immediately perform a whale scramble.");
     RegAdminCmd("sm_whalescramblevote", Command_ForceScrambleVote, ADMFLAG_GENERIC, "Force a whale scramble vote.");
@@ -210,7 +212,7 @@ public Action Command_SurrenderRound(int client, int args)
 public Action Command_WhaleScramble(int client, int args)
 {
     LogWhale("Admin whale scramble requested by %N (%d).", client, GetClientUserId(client));
-    StartConfiguredWhaleScramble(client, true, true);
+    StartConfiguredWhaleScramble(client, true, true, true);
     return Plugin_Handled;
 }
 
@@ -644,20 +646,20 @@ static bool StartAutoScramble(bool suppressFeedback)
     }
 
     LogWhale("Auto scramble triggered.");
-    return StartConfiguredWhaleScramble(0, !suppressFeedback, false);
+    return StartConfiguredWhaleScramble(0, !suppressFeedback, false, false);
 }
 
-static bool StartConfiguredWhaleScramble(int issuer, bool broadcastFailures, bool allowLowPop)
+static bool StartConfiguredWhaleScramble(int issuer, bool broadcastFailures, bool allowLowPop, bool forced)
 {
     if (g_hTopSwap != null && g_hTopSwap.BoolValue)
     {
-        LogWhale("Configured scramble mode: topswap.");
-        return StartWhaleScramble(issuer, broadcastFailures, allowLowPop);
+        LogWhale("Configured scramble mode: topswap forced=%d.", forced ? 1 : 0);
+        return StartWhaleScramble(issuer, broadcastFailures, allowLowPop, forced);
     }
     else if (g_hRandom != null && g_hRandom.BoolValue)
     {
-        LogWhale("Configured scramble mode: random.");
-        return StartRandomWhaleScramble(issuer, broadcastFailures, allowLowPop);
+        LogWhale("Configured scramble mode: random forced=%d.", forced ? 1 : 0);
+        return StartRandomWhaleScramble(issuer, broadcastFailures, allowLowPop, forced);
     }
 
     NotifyFailure(issuer, broadcastFailures, "No scramble mode is enabled. Set sm_ws_topswap or sm_ws_random to 1.");
@@ -749,7 +751,7 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
                 }
                 else
                 {
-                    success = StartConfiguredWhaleScramble(0, true, g_bVoteAllowLowPop);
+                    success = StartConfiguredWhaleScramble(0, true, g_bVoteAllowLowPop, false);
                 }
 
                 if (success)
@@ -853,9 +855,9 @@ static void ClearScrambleCooldown()
     }
 }
 
-static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLowPop)
+static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLowPop, bool forced)
 {
-    LogWhale("StartWhaleScramble: issuer=%d allowLowPop=%d.", issuer, allowLowPop ? 1 : 0);
+    LogWhale("StartWhaleScramble: issuer=%d allowLowPop=%d forced=%d.", issuer, allowLowPop ? 1 : 0, forced ? 1 : 0);
     g_iRoundsSinceAuto = 0;
     int totalPlayers = 0;
     int redCount = 0;
@@ -908,7 +910,7 @@ static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLow
         if (team == TEAM_RED) redEligible++;
         else bluEligible++;
 
-        int score = GetScrambleScore(i, false);
+        int score = GetScrambleScore(i, false, forced);
         if (team == TEAM_RED)
         {
             InsertTopN(i, score, topRed, topRedScore, MAX_TOP_SWAP);
@@ -973,7 +975,7 @@ static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLow
             if (team == TEAM_RED) redEligible++;
             else bluEligible++;
 
-            int score = GetScrambleScore(i, true);
+            int score = GetScrambleScore(i, true, forced);
             if (team == TEAM_RED)
             {
                 InsertTopN(i, score, topRed, topRedScore, MAX_TOP_SWAP);
@@ -1039,9 +1041,9 @@ static bool StartWhaleScramble(int issuer, bool broadcastFailures, bool allowLow
     return true;
 }
 
-static bool StartRandomWhaleScramble(int issuer, bool broadcastFailures, bool allowLowPop)
+static bool StartRandomWhaleScramble(int issuer, bool broadcastFailures, bool allowLowPop, bool forced)
 {
-    LogWhale("StartRandomWhaleScramble: issuer=%d allowLowPop=%d.", issuer, allowLowPop ? 1 : 0);
+    LogWhale("StartRandomWhaleScramble: issuer=%d allowLowPop=%d forced=%d.", issuer, allowLowPop ? 1 : 0, forced ? 1 : 0);
     g_iRoundsSinceAuto = 0;
     int totalPlayers = 0;
     int redCount = 0;
@@ -1089,7 +1091,7 @@ static bool StartRandomWhaleScramble(int issuer, bool broadcastFailures, bool al
         if (team != TEAM_RED && team != TEAM_BLU) continue;
 
         if (!ignoreImmunity && IsScrambleImmune(i)) continue;
-        if (!IsSimpleScrambleEligibleClass(i)) continue;
+        if (!IsSimpleScrambleEligibleClass(i, forced)) continue;
 
         if (team == TEAM_RED)
         {
@@ -1414,7 +1416,7 @@ static void InsertTopN(int client, int score, int clients[MAX_SWAP_BUFFER], int 
     }
 }
 
-static int GetScrambleScore(int client, bool ignoreClass)
+static int GetScrambleScore(int client, bool ignoreClass, bool forced)
 {
     if (client <= 0 || !IsClientInGame(client))
     {
@@ -1424,7 +1426,8 @@ static int GetScrambleScore(int client, bool ignoreClass)
     if (!ignoreClass)
     {
         TFClassType cls = TF2_GetPlayerClass(client);
-        if (cls == TFClass_Spy || cls == TFClass_Engineer || cls == TFClass_Medic)
+        if (cls == TFClass_Spy
+            || (forced && (cls == TFClass_Engineer || cls == TFClass_Medic)))
         {
             return 0;
         }
@@ -1433,7 +1436,7 @@ static int GetScrambleScore(int client, bool ignoreClass)
     return GetClientFrags(client);
 }
 
-static bool IsSimpleScrambleEligibleClass(int client)
+static bool IsSimpleScrambleEligibleClass(int client, bool forced)
 {
     if (client <= 0 || !IsClientInGame(client))
     {
@@ -1441,7 +1444,7 @@ static bool IsSimpleScrambleEligibleClass(int client)
     }
 
     TFClassType cls = TF2_GetPlayerClass(client);
-    return cls != TFClass_Engineer && cls != TFClass_Medic;
+    return !forced || (cls != TFClass_Engineer && cls != TFClass_Medic);
 }
 
 static bool SelectRandomPlayers(const int candidates[MAXPLAYERS + 1], int candidateCount, int selected[MAX_SWAP_BUFFER], int selectedCount)
