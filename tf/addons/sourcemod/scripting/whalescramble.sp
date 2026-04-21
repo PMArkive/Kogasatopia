@@ -264,6 +264,7 @@ public Action SayListener(int client, const char[] command, int argc)
 public void Event_RoundWin(Event event, const char[] name, bool dontBroadcast)
 {
     ClearScrambleCooldown();
+    ResetSurrenderVotes();
 
     if (g_hAutoRounds == null)
     {
@@ -700,6 +701,21 @@ static void ResetVotes()
     for (int i = 1; i <= MaxClients; i++)
     {
         g_bPlayerRequestedScramble[i] = false;
+        g_bPlayerRequestedSurrender[i] = false;
+        g_iPlayerSurrenderVoteTeam[i] = 0;
+        g_sPlayerSurrenderVoteSteamId[i][0] = '\0';
+    }
+}
+
+static void ResetSurrenderVotes()
+{
+    g_iSurrenderVoteRequests = 0;
+    if (g_eActiveVoteKind == WhaleVote_Surrender)
+    {
+        g_eActiveVoteKind = WhaleVote_None;
+    }
+    for (int i = 1; i <= MaxClients; i++)
+    {
         g_bPlayerRequestedSurrender[i] = false;
         g_iPlayerSurrenderVoteTeam[i] = 0;
         g_sPlayerSurrenderVoteSteamId[i][0] = '\0';
@@ -1143,6 +1159,7 @@ public Action Timer_DoSwap(Handle timer, DataPack pack)
     moved = pairCount * 2;
     if (moved > 0)
     {
+        ResetSurrenderVotes();
         StartScrambleCooldown();
         CPrintToChatAll("{tomato}[{purple}Gap{tomato}]{default} {gold}Whalescrambling{default} %d players!", moved);
         LogWhale("Scramble executed: moved=%d pairs=%d.", moved, pairCount);
