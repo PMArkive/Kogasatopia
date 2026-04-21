@@ -46,9 +46,7 @@ enum WhaleVoteKind
 bool g_bPlayerRequestedScramble[MAXPLAYERS + 1];
 bool g_bPlayerRequestedSurrender[MAXPLAYERS + 1];
 int g_iPlayerSurrenderVoteTeam[MAXPLAYERS + 1];
-char g_sPlayerSurrenderVoteSteamId[MAXPLAYERS + 1][32];
 int g_iScrambleVoteRequests = 0;
-int g_iSurrenderVoteRequests = 0;
 bool g_bVoteRunning = false;
 bool g_bNativeVotes = false;
 bool g_bVoteAllowLowPop = false;
@@ -385,13 +383,8 @@ static bool ShouldIgnoreScrambleImmunity(int totalPlayers, bool randomMode)
     return totalPlayers <= (MAX_TOP_SWAP * 2);
 }
 
-static int GetVoteRequestCount(WhaleVoteKind kind)
+static int GetScrambleVoteRequestCount()
 {
-    if (kind == WhaleVote_Surrender)
-    {
-        return g_iSurrenderVoteRequests;
-    }
-
     return g_iScrambleVoteRequests;
 }
 
@@ -423,11 +416,6 @@ static void ClearClientSurrenderVote(int client)
 {
     g_bPlayerRequestedSurrender[client] = false;
     g_iPlayerSurrenderVoteTeam[client] = 0;
-    g_sPlayerSurrenderVoteSteamId[client][0] = '\0';
-    if (g_iSurrenderVoteRequests > 0)
-    {
-        g_iSurrenderVoteRequests--;
-    }
 }
 
 static bool HasPlayerRequestedVote(int client, WhaleVoteKind kind)
@@ -440,14 +428,8 @@ static bool HasPlayerRequestedVote(int client, WhaleVoteKind kind)
     return g_bPlayerRequestedScramble[client];
 }
 
-static void IncrementVoteRequestCount(WhaleVoteKind kind)
+static void IncrementScrambleVoteRequestCount()
 {
-    if (kind == WhaleVote_Surrender)
-    {
-        g_iSurrenderVoteRequests++;
-        return;
-    }
-
     g_iScrambleVoteRequests++;
 }
 
@@ -488,17 +470,16 @@ static void HandleVoteRequest(int client, WhaleVoteKind kind)
     }
 
     SetPlayerVoteRequested(client, kind, true);
-    IncrementVoteRequestCount(kind);
     if (kind == WhaleVote_Surrender)
     {
         g_iPlayerSurrenderVoteTeam[client] = GetClientTeam(client);
-        if (!GetClientAuthId(client, AuthId_SteamID64, g_sPlayerSurrenderVoteSteamId[client], sizeof(g_sPlayerSurrenderVoteSteamId[]), true))
-        {
-            g_sPlayerSurrenderVoteSteamId[client][0] = '\0';
-        }
+    }
+    else
+    {
+        IncrementScrambleVoteRequestCount();
     }
 
-    int requestCount = GetVoteRequestCount(kind);
+    int requestCount = GetScrambleVoteRequestCount();
     if (kind == WhaleVote_Surrender)
     {
         requestCount = GetSurrenderVoteCountForTeam(g_iPlayerSurrenderVoteTeam[client]);
@@ -681,7 +662,10 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
             g_bVoteAllowLowPop = false;
             g_eActiveVoteKind = WhaleVote_None;
             g_iActiveSurrenderTeam = 0;
-            ResetVotes();
+            if (voteKind == WhaleVote_Scramble)
+            {
+                ResetScrambleVotes();
+            }
             LogWhale("Vote ended.");
             return 0;
         }
@@ -698,6 +682,10 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
             g_bVoteAllowLowPop = false;
             g_eActiveVoteKind = WhaleVote_None;
             g_iActiveSurrenderTeam = 0;
+            if (voteKind == WhaleVote_Scramble)
+            {
+                ResetScrambleVotes();
+            }
             LogWhale("Vote cancelled: %d.", param1);
             return 0;
         }
@@ -795,27 +783,28 @@ public int ScrambleVoteHandler(NativeVote vote, MenuAction action, int param1, i
     return 0;
 }
 
-static void ResetVotes()
+static void ResetScrambleVotes()
 {
     g_iScrambleVoteRequests = 0;
-    g_iSurrenderVoteRequests = 0;
-    g_bVoteRunning = false;
-    g_eActiveVoteKind = WhaleVote_None;
-    g_iActiveSurrenderTeam = 0;
     for (int i = 1; i <= MaxClients; i++)
     {
         g_bPlayerRequestedScramble[i] = false;
-        g_bPlayerRequestedSurrender[i] = false;
-        g_iPlayerSurrenderVoteTeam[i] = 0;
-        g_sPlayerSurrenderVoteSteamId[i][0] = '\0';
     }
+}
+
+static void ResetVotes()
+{
+    ResetScrambleVotes();
+    ResetSurrenderVotes();
+    g_bVoteRunning = false;
+    g_eActiveVoteKind = WhaleVote_None;
+    g_iActiveSurrenderTeam = 0;
 }
 
 static void ResetSurrenderVotes()
 {
     bool preserveActiveSurrenderVote = g_bVoteRunning && g_eActiveVoteKind == WhaleVote_Surrender;
 
-    g_iSurrenderVoteRequests = 0;
     if (!preserveActiveSurrenderVote && g_eActiveVoteKind == WhaleVote_Surrender)
     {
         g_eActiveVoteKind = WhaleVote_None;
@@ -828,7 +817,6 @@ static void ResetSurrenderVotes()
     {
         g_bPlayerRequestedSurrender[i] = false;
         g_iPlayerSurrenderVoteTeam[i] = 0;
-        g_sPlayerSurrenderVoteSteamId[i][0] = '\0';
     }
 }
 
