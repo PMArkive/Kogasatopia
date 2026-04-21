@@ -315,6 +315,12 @@ static void GetVoteActionName(WhaleVoteKind kind, char[] buffer, int maxlen)
     strcopy(buffer, maxlen, "scramble");
 }
 
+static bool IsPlayerOnPlayableTeam(int client)
+{
+    int team = GetClientTeam(client);
+    return team == TEAM_RED || team == TEAM_BLU;
+}
+
 static int GetVoteRequestCount(WhaleVoteKind kind)
 {
     if (kind == WhaleVote_Surrender)
@@ -361,6 +367,13 @@ static void HandleVoteRequest(int client, WhaleVoteKind kind)
 {
     if (client <= 0 || !IsClientInGame(client) || IsFakeClient(client))
         return;
+
+    if (kind == WhaleVote_Surrender && !IsPlayerOnPlayableTeam(client))
+    {
+        CPrintToChat(client, "{gold}[WhaleScramble] {default}Only teams {red}RED {default}and {blue}BLU{default} can surrender!");
+        LogWhale("Surrender request rejected: invalid team (client %N team=%d).", client, GetClientTeam(client));
+        return;
+    }
 
     char actionName[16];
     GetVoteActionName(kind, actionName, sizeof(actionName));
