@@ -66,9 +66,10 @@ stock int CheckScythe(int client)
     if (scythe <= MaxClients || !IsValidEntity(scythe))
         return 0;
 
-    int tally = 0;
-    if (TF2CustAttr_GetInt(scythe, "harvester attributes") != 0)
-        tally++;
+    if (TF2CustAttr_GetInt(scythe, "harvester attributes") != 1)
+        return 0;
+
+    int tally = 1;
     if (scythe == GetEntPropEnt(client, Prop_Data, "m_hActiveWeapon"))
         tally++;
 
