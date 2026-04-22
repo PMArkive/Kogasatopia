@@ -405,12 +405,15 @@ public bool IsUncleCycleActive()
 
 // Array of command categories and their descriptions
 static const char g_CommandInfo[][] = {
-    "{lightgreen}Weapons:{default}\n {gold}!reverts !r !rp{default} (view weapon changes / panel)\n {gold}!c !cp{default} (custom weapons / panel)\n {gold}!cw{default} (equip custom weapons)",
-    "{lightgreen}Engineer buildings:{default}\n {gold}!amp !a !pads !p !ah{default} (new engi buildings / info)",
-    "{lightgreen}Voting:{default} {gold}!rtv !nominate !scramble !nextmap !next{default}",
-    "{lightgreen}Server:{default} {gold}!steam !chat !info !rules !voice {default}",
-    "{lightgreen}Gameplay:{default} {gold}!cw !center !duel !pads !fov !classlimits{default}",
-    "{lightgreen}Fun:{default} {gold}!hug !rape !thirdperson !firstperson !name (color){default}"
+    "{lightgreen}Weapons:{default} {gold}!reverts !r !rp !c !cp !cw{default}",
+    "{lightgreen}WhaleTracker:{default} {gold}!pts !ptsme !mvp !bp !sendbp !ranks !stats{default}",
+    "{lightgreen}Tags/Clans:{default} {gold}!tags !clan !clans !clanhelp !claninfo !clanmembers{default}",
+    "{lightgreen}Clan tools:{default} {gold}!clantag !claninvite !clankick !clanwar{default}",
+    "{lightgreen}Sounds:{default} {gold}!sounds !saysound !vol !opt !opts !killsounds !diesounds{default}",
+    "{lightgreen}Engineer:{default} {gold}!amp !a !pads !p !ah{default}",
+    "{lightgreen}Voting:{default} {gold}!rtv !nominate !whalescramble !surrender{default}",
+    "{lightgreen}Social:{default} {gold}!hug !rape !feed !leaderboard !duel{default}",
+    "{lightgreen}Server:{default} {gold}!steam !chat !info !rules !voice !git !repo !feedback{default}"
 };
 
 public Action:Command_cmds(int client, int args)
