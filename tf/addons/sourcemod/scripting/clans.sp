@@ -324,6 +324,7 @@ char g_sClanHistoryMenuClanName[MAXPLAYERS + 1][CLAN_NAME_MAXLEN + 1];
 
 public void OnPluginStart()
 {
+    LoadTranslations("common.phrases");
     g_cvDatabaseConfig = CreateConVar("sm_clans_database", "default", "Database config name from databases.cfg to use for clans.");
     AutoExecConfig(true, "clans");
 

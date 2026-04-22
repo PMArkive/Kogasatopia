@@ -27,6 +27,7 @@ public Plugin myinfo =
 
 public void OnPluginStart()
 {
+    LoadTranslations("common.phrases");
     BuildPath(Path_SM, g_sAdminsFile, sizeof(g_sAdminsFile), "configs/admins_simple.ini");
     ConnectToDatabase();
     RegConsoleCmd("sm_admins", Command_ShowAdmins, "Lists online admins");

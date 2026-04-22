@@ -408,6 +408,7 @@ public Plugin myinfo =
 
 public void OnPluginStart()
 {
+    LoadTranslations("common.phrases");
     if (g_WebNameColors == null)
     {
         g_WebNameColors = new StringMap();

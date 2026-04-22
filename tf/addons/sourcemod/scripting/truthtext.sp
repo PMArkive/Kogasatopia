@@ -61,6 +61,7 @@ public Plugin myinfo =
 
 public void OnPluginStart()
 {
+    LoadTranslations("common.phrases");
     LoadFilterConfig();
 
     // Truthtext Convars
