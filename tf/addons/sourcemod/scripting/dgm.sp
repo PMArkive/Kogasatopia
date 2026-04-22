@@ -38,10 +38,6 @@ Handle g_hSetupMonitorTimer = INVALID_HANDLE;
 int g_iSetupCheckCount = 0;
 bool g_bSetupDetected = false;
 bool g_bSetupEnded = false;
-int g_iGameRulesEntity = -1;
-bool g_bGameRulesPropsCached = false;
-bool g_bHasInSetupProp = false;
-bool g_bHasSetupTimeEndProp = false;
 
 public Plugin myinfo = {
     name = "Gamemode Detector",
@@ -106,10 +102,6 @@ public void OnMapStart()
     g_iSetupCheckCount = 0;
     g_bSetupDetected = false;
     g_bSetupEnded = false;
-    g_iGameRulesEntity = -1;
-    g_bGameRulesPropsCached = false;
-    g_bHasInSetupProp = false;
-    g_bHasSetupTimeEndProp = false;
     DGM_StartSetupCheckTimer();
 }
 
@@ -126,74 +118,9 @@ public void ConVarChange_MpDisableRespawnTimes(ConVar convar, const char[] oldVa
     }
 }
 
-static int DGM_GetGameRulesEntity()
+static bool DGM_IsRoundRunning()
 {
-    if (g_iGameRulesEntity != -1 && IsValidEntity(g_iGameRulesEntity))
-    {
-        return g_iGameRulesEntity;
-    }
-
-    int ent = FindEntityByClassname(-1, "tf_gamerules");
-    if (ent == -1)
-    {
-        ent = FindEntityByClassname(-1, "game_rules_proxy");
-    }
-
-    if (ent != g_iGameRulesEntity)
-    {
-        g_iGameRulesEntity = ent;
-        g_bGameRulesPropsCached = false;
-        g_bHasInSetupProp = false;
-        g_bHasSetupTimeEndProp = false;
-    }
-
-    return g_iGameRulesEntity;
-}
-
-static void DGM_EnsureGameRulesProps()
-{
-    int ent = DGM_GetGameRulesEntity();
-    if (ent == -1 || g_bGameRulesPropsCached)
-    {
-        return;
-    }
-
-    g_bHasInSetupProp = HasEntProp(ent, Prop_Send, "m_bInSetup");
-    g_bHasSetupTimeEndProp = HasEntProp(ent, Prop_Send, "m_flSetupTimeEnd");
-    g_bGameRulesPropsCached = true;
-}
-
-static bool DGM_IsSetupActiveStart()
-{
-    if (GameRules_GetRoundState() == RoundState_Preround)
-    {
-        return true;
-    }
-
-    DGM_EnsureGameRulesProps();
-    if (g_bHasInSetupProp && GameRules_GetProp("m_bInSetup", 1) != 0)
-    {
-        return true;
-    }
-
-    if (g_bHasSetupTimeEndProp)
-    {
-        float setupEnd = GameRules_GetPropFloat("m_flSetupTimeEnd");
-        return setupEnd > 0.0 && setupEnd > GetGameTime();
-    }
-
-    return false;
-}
-
-static bool DGM_IsSetupActiveEnd()
-{
-    if (GameRules_GetRoundState() == RoundState_Preround)
-    {
-        return true;
-    }
-
-    DGM_EnsureGameRulesProps();
-    return g_bHasInSetupProp && GameRules_GetProp("m_bInSetup", 1) != 0;
+    return (GameRules_GetRoundState() == RoundState_RoundRunning);
 }
 
 static void DGM_StartSetupCheckTimer()
@@ -211,7 +138,7 @@ public Action Timer_CheckSetupStart(Handle timer)
 {
     g_iSetupCheckCount++;
 
-    if (DGM_IsSetupActiveStart())
+    if (!DGM_IsRoundRunning())
     {
         PrintToChatAll("Setup detected, bhop enabled");
         g_bSetupDetected = true;
@@ -235,7 +162,7 @@ public Action Timer_CheckSetupStart(Handle timer)
 
 public Action Timer_MonitorSetupEnd(Handle timer)
 {
-    if (!DGM_IsSetupActiveEnd())
+    if (DGM_IsRoundRunning())
     {
         if (!g_bSetupEnded)
         {
@@ -453,6 +380,7 @@ public void Event_RoundActive(Event event, const char[] name, bool dontBroadcast
     if (g_cvTimeOverride != null)    g_cvTimeOverride.RestoreDefault();
     g_InternalOverride = false; // This is set to true when a round is won, it changes back to false now
     g_PointCaptures = 0;
+    g_bSetupDetected = false;
     g_bSetupEnded = false;
     DGM_StartSetupCheckTimer();
     if (!g_bRoundStartedOnce)
