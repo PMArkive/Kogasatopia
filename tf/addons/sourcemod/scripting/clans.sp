@@ -329,6 +329,7 @@ public void OnPluginStart()
 
     RegConsoleCmd("sm_clan", Command_ClanMenu, "Open the clan menu.");
     RegConsoleCmd("sm_clans", Command_ClansList, "Browse clans.");
+    RegConsoleCmd("sm_clanhelp", Command_ClanHelp, "Show a clan command summary.");
     RegConsoleCmd("sm_clancreate", Command_ClanCreate, "Create a clan.");
     RegConsoleCmd("sm_clanleave", Command_ClanLeave, "Leave your clan or delete it if you are the owner.");
     RegConsoleCmd("sm_claninvite", Command_ClanInvite, "Invite a player to your clan.");
@@ -4742,6 +4743,25 @@ public Action Command_ClansList(int client, int args)
         ... "ORDER BY member_count DESC, c.name ASC");
 
     g_Database.Query(SQL_OnClansListMenu, query, GetClientUserId(client));
+    return Plugin_Handled;
+}
+
+public Action Command_ClanHelp(int client, int args)
+{
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        ReplyToCommand(client, "[Clans] This command can only be used by players.");
+        return Plugin_Handled;
+    }
+
+    CPrintToChat(client, "{green}[Clans]{default} !clan: open the clan menu.");
+    CPrintToChat(client, "{green}[Clans]{default} !clans: browse existing clans.");
+    CPrintToChat(client, "{green}[Clans]{default} !claninvite <player>: invite a player.");
+    CPrintToChat(client, "{green}[Clans]{default} !claninfo <player|name|tag>: show clan info.");
+    CPrintToChat(client, "{green}[Clans]{default} !clanmembers: show your clan members.");
+    CPrintToChat(client, "{green}[Clans]{default} !clanwar: declare war or surrender.");
+    CPrintToChat(client, "{green}[Clans]{default} !clankick <player>: kick a member.");
+    CPrintToChat(client, "{green}[Clans]{default} !clantag: set main tag or your sub-tag.");
     return Plugin_Handled;
 }
 
