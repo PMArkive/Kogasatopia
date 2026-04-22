@@ -597,6 +597,7 @@ static void DetectGameMode()
     CreateDefaultConfigs();
     bool sym = false;
     char modeName[32] = "unknown";
+    char mapName[64];
 
     switch (gameMode)
     {
@@ -665,6 +666,17 @@ static void DetectGameMode()
             strcopy(modeName, sizeof(modeName), "Default");
         }
     }
+
+    GetCurrentMap(mapName, sizeof(mapName));
+    if (StrContains(mapName, "ultiduo_", false) != -1)
+    {
+        strcopy(modeName, sizeof(modeName), "ultiduo");
+    }
+    else if (StrContains(mapName, "mge_", false) != -1)
+    {
+        strcopy(modeName, sizeof(modeName), "mge");
+    }
+
     g_bSymmetrical = sym;
     g_cvGameMode.SetString(modeName);
 }
