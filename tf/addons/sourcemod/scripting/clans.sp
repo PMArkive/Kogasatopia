@@ -466,366 +466,53 @@ public void SQL_OnDatabaseConnected(Database db, const char[] error, any data)
     g_Database.Driver.GetIdentifier(g_sDbDriver, sizeof(g_sDbDriver));
     g_bDatabaseReady = false;
     g_bClanIdCacheReady = false;
+    ResetActiveWarCache();
 
     if (!g_Database.SetCharset("utf8mb4"))
     {
         LogError("[Clans] Failed to set utf8mb4 charset");
     }
 
-    CreateSchemaStep(0);
+    FinishDatabaseInitialization();
 }
 
-void CreateSchemaStep(int step)
+void FinishDatabaseInitialization()
 {
     if (g_Database == null)
     {
         return;
     }
 
-    char query[1024];
-    if (!BuildSchemaQuery(step, query, sizeof(query)))
+    g_bDatabaseReady = true;
+    CleanupExpiredInvites();
+    if (!g_bActiveWarCacheReady || g_hActiveWars == null)
     {
-        g_bDatabaseReady = true;
-        CleanupExpiredInvites();
-        if (!g_bActiveWarCacheReady || g_hActiveWars == null)
-        {
-            LoadActiveClanWarsCacheSync();
-        }
-        CleanupExpiredWars();
-        RebuildClanIdCache();
+        LoadActiveClanWarsCacheSync();
+    }
+    CleanupExpiredWars();
+    RebuildClanIdCache();
 
-        if (g_hInviteCleanupTimer == null)
-        {
-            g_hInviteCleanupTimer = CreateTimer(INVITE_CLEANUP_INTERVAL, Timer_CleanupExpiredInvites, 0, TIMER_REPEAT);
-        }
-
-        if (g_hClanWarFlushTimer == null)
-        {
-            g_hClanWarFlushTimer = CreateTimer(CLAN_WAR_FLUSH_INTERVAL, Timer_FlushClanWarDeltas, 0, TIMER_REPEAT);
-        }
-
-        PrintToServer("[Clans] Database ready using driver '%s'.", g_sDbDriver);
-
-        for (int i = 1; i <= MaxClients; i++)
-        {
-            if (IsClientInGame(i) && !IsFakeClient(i))
-            {
-                RequestClientClanIdLoad(i);
-            }
-        }
-
-        FlushPendingClanWarPersistenceSync();
-        return;
+    if (g_hInviteCleanupTimer == null)
+    {
+        g_hInviteCleanupTimer = CreateTimer(INVITE_CLEANUP_INTERVAL, Timer_CleanupExpiredInvites, 0, TIMER_REPEAT);
     }
 
-    g_Database.Query(SQL_OnSchemaStepComplete, query, step);
-}
-
-public void SQL_OnSchemaStepComplete(Database db, DBResultSet results, const char[] error, any data)
-{
-    if (error[0])
+    if (g_hClanWarFlushTimer == null)
     {
-        if (StrContains(error, "Duplicate column", false) == -1 && StrContains(error, "duplicate column name", false) == -1)
+        g_hClanWarFlushTimer = CreateTimer(CLAN_WAR_FLUSH_INTERVAL, Timer_FlushClanWarDeltas, 0, TIMER_REPEAT);
+    }
+
+    PrintToServer("[Clans] Database ready using driver '%s'.", g_sDbDriver);
+
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (IsClientInGame(i) && !IsFakeClient(i))
         {
-            LogError("[Clans] Schema creation failed on step %d: %s", data, error);
-            HandleDatabaseConnectionLoss(error);
-            return;
+            RequestClientClanIdLoad(i);
         }
     }
 
-    CreateSchemaStep(data + 1);
-}
-
-bool BuildSchemaQuery(int step, char[] query, int maxlen)
-{
-    bool mysql = IsMySql();
-
-    switch (step)
-    {
-        case 0:
-        {
-            if (mysql)
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clans ("
-                    ... "id INT NOT NULL AUTO_INCREMENT, "
-                    ... "name VARCHAR(64) NULL UNIQUE, "
-                    ... "`desc` VARCHAR(128) NOT NULL DEFAULT '', "
-                    ... "tag VARCHAR(64) NULL, "
-                    ... "owner BIGINT UNSIGNED NOT NULL, "
-                    ... "is_open TINYINT(1) NOT NULL DEFAULT 0, "
-                    ... "created_at INT UNSIGNED NOT NULL, "
-                    ... "PRIMARY KEY (id)"
-                    ... ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-            }
-            else
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clans ("
-                    ... "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                    ... "name VARCHAR(64) UNIQUE NULL, "
-                    ... "`desc` VARCHAR(128) NOT NULL DEFAULT '', "
-                    ... "tag VARCHAR(64) NULL, "
-                    ... "owner BIGINT UNSIGNED NOT NULL, "
-                    ... "is_open TINYINT(1) NOT NULL DEFAULT 0, "
-                    ... "created_at INT UNSIGNED NOT NULL"
-                    ... ")");
-            }
-            return true;
-        }
-        case 1:
-        {
-            if (mysql)
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clan_members ("
-                    ... "clan_id INT NOT NULL, "
-                    ... "steamid64 BIGINT UNSIGNED NOT NULL, "
-                    ... "rank TINYINT NOT NULL DEFAULT 0, "
-                    ... "joined_at INT UNSIGNED NOT NULL, "
-                    ... "PRIMARY KEY (clan_id, steamid64), "
-                    ... "UNIQUE KEY uq_clan_members_steamid64 (steamid64)"
-                    ... ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-            }
-            else
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clan_members ("
-                    ... "clan_id INT NOT NULL, "
-                    ... "steamid64 BIGINT UNSIGNED NOT NULL, "
-                    ... "rank TINYINT NOT NULL DEFAULT 0, "
-                    ... "joined_at INT UNSIGNED NOT NULL, "
-                    ... "PRIMARY KEY (clan_id, steamid64), "
-                    ... "UNIQUE (steamid64)"
-                    ... ")");
-            }
-            return true;
-        }
-        case 2:
-        {
-            if (mysql)
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clan_invites ("
-                    ... "id INT NOT NULL AUTO_INCREMENT, "
-                    ... "clan_id INT NOT NULL, "
-                    ... "steamid64 BIGINT UNSIGNED NOT NULL, "
-                    ... "invited_by BIGINT UNSIGNED NOT NULL, "
-                    ... "expires_at INT UNSIGNED NOT NULL, "
-                    ... "PRIMARY KEY (id)"
-                    ... ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-            }
-            else
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clan_invites ("
-                    ... "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                    ... "clan_id INT NOT NULL, "
-                    ... "steamid64 BIGINT UNSIGNED NOT NULL, "
-                    ... "invited_by BIGINT UNSIGNED NOT NULL, "
-                    ... "expires_at INT UNSIGNED NOT NULL"
-                    ... ")");
-            }
-            return true;
-        }
-        case 3:
-        {
-            if (mysql)
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clan_relations ("
-                    ... "clan_id_a INT NOT NULL, "
-                    ... "clan_id_b INT NOT NULL, "
-                    ... "relation_type TINYINT NOT NULL, "
-                    ... "created_at INT NOT NULL"
-                    ... ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-            }
-            else
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clan_relations ("
-                    ... "clan_id_a INT NOT NULL, "
-                    ... "clan_id_b INT NOT NULL, "
-                    ... "relation_type TINYINT NOT NULL, "
-                    ... "created_at INT NOT NULL"
-                    ... ")");
-            }
-            return true;
-        }
-        case 4:
-        {
-            if (mysql)
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clan_sub_tags ("
-                    ... "clan_id INT NOT NULL, "
-                    ... "steamid64 BIGINT UNSIGNED NOT NULL, "
-                    ... "tag VARCHAR(64) NOT NULL, "
-                    ... "created_at INT UNSIGNED NOT NULL, "
-                    ... "PRIMARY KEY (clan_id, steamid64), "
-                    ... "UNIQUE KEY uq_clan_sub_tags_steamid64 (steamid64)"
-                    ... ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-            }
-            else
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clan_sub_tags ("
-                    ... "clan_id INT NOT NULL, "
-                    ... "steamid64 BIGINT UNSIGNED NOT NULL, "
-                    ... "tag VARCHAR(64) NOT NULL, "
-                    ... "created_at INT UNSIGNED NOT NULL, "
-                    ... "PRIMARY KEY (clan_id, steamid64), "
-                    ... "UNIQUE (steamid64)"
-                    ... ")");
-            }
-            return true;
-        }
-        case 5:
-        {
-            FormatEx(query, maxlen,
-                "ALTER TABLE clans ADD COLUMN `desc` VARCHAR(128) NOT NULL DEFAULT ''");
-            return true;
-        }
-        case 6:
-        {
-            if (mysql)
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clan_wars ("
-                    ... "id INT NOT NULL AUTO_INCREMENT, "
-                    ... "clan_id_a INT NOT NULL, "
-                    ... "clan_id_b INT NOT NULL, "
-                    ... "declared_by BIGINT UNSIGNED NOT NULL, "
-                    ... "score_a INT NOT NULL DEFAULT 0, "
-                    ... "score_b INT NOT NULL DEFAULT 0, "
-                    ... "winner_clan_id INT NULL, "
-                    ... "status TINYINT NOT NULL DEFAULT 0, "
-                    ... "created_at INT UNSIGNED NOT NULL, "
-                    ... "expires_at INT UNSIGNED NOT NULL, "
-                    ... "finished_at INT UNSIGNED NULL, "
-                    ... "PRIMARY KEY (id), "
-                    ... "UNIQUE KEY uq_clan_wars_pair (clan_id_a, clan_id_b)"
-                    ... ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-            }
-            else
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clan_wars ("
-                    ... "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                    ... "clan_id_a INT NOT NULL, "
-                    ... "clan_id_b INT NOT NULL, "
-                    ... "declared_by BIGINT UNSIGNED NOT NULL, "
-                    ... "score_a INT NOT NULL DEFAULT 0, "
-                    ... "score_b INT NOT NULL DEFAULT 0, "
-                    ... "winner_clan_id INT NULL, "
-                    ... "status TINYINT NOT NULL DEFAULT 0, "
-                    ... "created_at INT UNSIGNED NOT NULL, "
-                    ... "expires_at INT UNSIGNED NOT NULL, "
-                    ... "finished_at INT UNSIGNED NULL, "
-                    ... "UNIQUE (clan_id_a, clan_id_b)"
-                    ... ")");
-            }
-            return true;
-        }
-        case 7:
-        {
-            if (mysql)
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clan_history ("
-                    ... "id INT NOT NULL AUTO_INCREMENT, "
-                    ... "clan_id INT NOT NULL, "
-                    ... "summary VARCHAR(255) NOT NULL, "
-                    ... "created_at INT UNSIGNED NOT NULL, "
-                    ... "PRIMARY KEY (id), "
-                    ... "KEY idx_clan_history_lookup (clan_id, created_at)"
-                    ... ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-            }
-            else
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clan_history ("
-                    ... "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                    ... "clan_id INT NOT NULL, "
-                    ... "summary VARCHAR(255) NOT NULL, "
-                    ... "created_at INT UNSIGNED NOT NULL"
-                    ... ")");
-            }
-            return true;
-        }
-        case 8:
-        {
-            if (mysql)
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clan_war_instances ("
-                    ... "id INT NOT NULL AUTO_INCREMENT, "
-                    ... "war_id INT NOT NULL, "
-                    ... "clan_id_a INT NOT NULL, "
-                    ... "clan_id_b INT NOT NULL, "
-                    ... "score_a INT NOT NULL DEFAULT 0, "
-                    ... "score_b INT NOT NULL DEFAULT 0, "
-                    ... "winner_clan_id INT NULL, "
-                    ... "status TINYINT NOT NULL DEFAULT 0, "
-                    ... "created_at INT UNSIGNED NOT NULL, "
-                    ... "finished_at INT UNSIGNED NULL, "
-                    ... "PRIMARY KEY (id), "
-                    ... "UNIQUE KEY uq_clan_war_instances (war_id, created_at), "
-                    ... "KEY idx_clan_war_instances_a (clan_id_a, created_at), "
-                    ... "KEY idx_clan_war_instances_b (clan_id_b, created_at)"
-                    ... ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-            }
-            else
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clan_war_instances ("
-                    ... "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                    ... "war_id INT NOT NULL, "
-                    ... "clan_id_a INT NOT NULL, "
-                    ... "clan_id_b INT NOT NULL, "
-                    ... "score_a INT NOT NULL DEFAULT 0, "
-                    ... "score_b INT NOT NULL DEFAULT 0, "
-                    ... "winner_clan_id INT NULL, "
-                    ... "status TINYINT NOT NULL DEFAULT 0, "
-                    ... "created_at INT UNSIGNED NOT NULL, "
-                    ... "finished_at INT UNSIGNED NULL, "
-                    ... "UNIQUE (war_id, created_at)"
-                    ... ")");
-            }
-            return true;
-        }
-        case 9:
-        {
-            if (mysql)
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clan_war_member_kills ("
-                    ... "war_instance_id INT NOT NULL, "
-                    ... "clan_id INT NOT NULL, "
-                    ... "steamid64 BIGINT UNSIGNED NOT NULL, "
-                    ... "kills INT NOT NULL DEFAULT 0, "
-                    ... "PRIMARY KEY (war_instance_id, steamid64), "
-                    ... "KEY idx_clan_war_member_kills_steamid64 (steamid64), "
-                    ... "KEY idx_clan_war_member_kills_war (war_instance_id, kills)"
-                    ... ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-            }
-            else
-            {
-                FormatEx(query, maxlen,
-                    "CREATE TABLE IF NOT EXISTS clan_war_member_kills ("
-                    ... "war_instance_id INT NOT NULL, "
-                    ... "clan_id INT NOT NULL, "
-                    ... "steamid64 BIGINT UNSIGNED NOT NULL, "
-                    ... "kills INT NOT NULL DEFAULT 0, "
-                    ... "PRIMARY KEY (war_instance_id, steamid64)"
-                    ... ")");
-            }
-            return true;
-        }
-    }
-
-    query[0] = '\0';
-    return false;
+    FlushPendingClanWarPersistenceSync();
 }
 
 bool IsMySql()
